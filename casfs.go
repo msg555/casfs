@@ -94,8 +94,6 @@ func doLstat(path string) (syscall.Stat_t, error) {
 	return st, err
 }
 
-const FUSE_ROOT_ID fuse.NodeID = 1
-
 func (nd *NodeData) handleLookupRequest(req *fuse.LookupRequest) {
 	cfs := nd.Cfs
 	lookupPath := path.Join(nd.Path, req.Name)
@@ -180,14 +178,11 @@ func (nd *NodeData) handleOpenRequest(req *fuse.OpenRequest) {
 			return
 		}
 
-		fd, err := syscall.Open(path.Join(nd.Cfs.OverlayDir, nd.Path), syscall.O_DIRECTORY, 0)
+		handle, err := CreateDirectoryHandle(nd)
 		if err != nil {
 			req.RespondError(WrapIOError(err))
 			return
 		}
-
-		fmt.Println(fd, err)
-		handle := &DirectoryHandle{fd}
 		handleId := nd.Cfs.AddHandle(handle)
 
 		fmt.Println("Made handle", handleId)
@@ -216,6 +211,8 @@ func (nd *NodeData) handleReleaseRequest(req *fuse.ReleaseRequest) {
 	nd.Cfs.HandleMapLock.Lock()
 	delete(nd.Cfs.HandleMap, req.Handle)
 	nd.Cfs.HandleMapLock.Unlock()
+
+	req.Respond()
 }
 
 func (nd *NodeData) handleReadRequest(req *fuse.ReadRequest) {
