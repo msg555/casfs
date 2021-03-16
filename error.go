@@ -8,8 +8,8 @@ import (
 )
 
 type FuseError struct {
-	source      error
-	errno				syscall.Errno
+	source error
+	errno  syscall.Errno
 }
 
 func (err FuseError) Error() string {
@@ -24,13 +24,18 @@ func WrapIOError(err error) FuseError {
 	e := err
 	for {
 		switch e.(type) {
-			case *os.PathError:
-				e = e.(*os.PathError).Err
-			default:
-				return FuseError{
-					source: err,
-					errno: syscall.EIO,
-				}
+		case *os.PathError:
+			e = e.(*os.PathError).Err
+		case syscall.Errno:
+			return FuseError{
+				source: err,
+				errno:  e.(syscall.Errno),
+			}
+		default:
+			return FuseError{
+				source: err,
+				errno:  syscall.EIO,
+			}
 		}
 	}
 }

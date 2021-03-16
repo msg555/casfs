@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -13,23 +12,16 @@ import (
 
 const MAX_BUFFER int = 4096
 
-/*
-type UnixDirent struct {
-	uint32		d_ino
-	uint32		d_off
-	uint16		d_reclen
-	
-}
-*/
-
 type HandleData interface {
-	Release(*fuse.ReleaseRequest)
+	Flush(*fuse.FlushRequest)
 	Read(*fuse.ReadRequest)
+	Release(*fuse.ReleaseRequest)
+	Write(*fuse.WriteRequest)
 }
 
 type DirectoryHandle struct {
-	File		*os.File
-	Entries	[]os.DirEntry
+	File    *os.File
+	Entries []os.DirEntry
 }
 
 func CreateDirectoryHandle(nd *NodeData) (*DirectoryHandle, error) {
@@ -62,15 +54,15 @@ func direntAlign(x int) int {
 
 func addDirEntry(buf []byte, name string, stat *syscall.Stat_t) int {
 	/*
-	define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
+			define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 
-	struct fuse_dirent {
-		u64   ino;
-		u64   off;
-		u32   namelen;
-		u32   type;
-    char name[];
-  };
+			struct fuse_dirent {
+				u64   ino;
+				u64   off;
+				u32   namelen;
+				u32   type;
+		    char name[];
+		  };
 	*/
 
 	entryBaseLen := 24 + len(name)
@@ -98,12 +90,11 @@ func addDirEntry(buf []byte, name string, stat *syscall.Stat_t) int {
 	return entryPadLen
 }
 
-
 func (hd *DirectoryHandle) Read(req *fuse.ReadRequest) {
 	if !req.Dir {
 		req.RespondError(FuseError{
 			source: errors.New("is a directory"),
-			errno: syscall.EISDIR,
+			errno:  syscall.EISDIR,
 		})
 		return
 	}
@@ -132,8 +123,18 @@ func (hd *DirectoryHandle) Read(req *fuse.ReadRequest) {
 		hd.Entries = hd.Entries[1:]
 	}
 
-	fmt.Println("WROTE:", bufOffset, buf[:bufOffset])
 	req.Respond(&fuse.ReadResponse{
 		Data: buf[:bufOffset],
+	})
+}
+
+func (hd *DirectoryHandle) Flush(req *fuse.FlushRequest) {
+	req.Respond()
+}
+
+func (hd *DirectoryHandle) Write(req *fuse.WriteRequest) {
+	req.RespondError(FuseError{
+		source: errors.New("cannot write to a directory"),
+		errno:  syscall.EIO,
 	})
 }
