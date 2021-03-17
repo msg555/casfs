@@ -1,4 +1,4 @@
-package main
+package fusefs
 
 import (
 	"errors"
@@ -15,8 +15,9 @@ const MAX_BUFFER int = 4096
 type HandleData interface {
 	Flush(*fuse.FlushRequest)
 	Read(*fuse.ReadRequest)
-	Release(*fuse.ReleaseRequest)
 	Write(*fuse.WriteRequest)
+
+	Release() error
 }
 
 type DirectoryHandle struct {
@@ -34,8 +35,8 @@ func CreateDirectoryHandle(nd *NodeData) (*DirectoryHandle, error) {
 	}, nil
 }
 
-func (hd *DirectoryHandle) Release(req *fuse.ReleaseRequest) {
-	hd.File.Close()
+func (hd *DirectoryHandle) Release() error {
+	return hd.File.Close()
 }
 
 /*

@@ -1,4 +1,4 @@
-package main
+package fusefs
 
 /*
 Missing FUSE functions
@@ -13,17 +13,12 @@ See: http://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html
 import (
 	"errors"
 	"fmt"
-	"os"
-	"os/signal"
 	"path"
 	"sync"
 	"syscall"
 	"time"
 
-"reflect"
-
 	"bazil.org/fuse"
-	"github.com/spf13/pflag"
 )
 
 const DURATION_DEFAULT time.Duration = time.Duration(1000000000 * 60 * 60)
@@ -125,7 +120,7 @@ func (nd *NodeData) handleLookupRequest(req *fuse.LookupRequest) {
 
 	lookupStat, err := doLstat(path.Join(cfs.OverlayDir, lookupPath))
 	if err != nil {
-		fmt.Println("lookup failed:", reflect.TypeOf(err))
+		fmt.Println("lookup failed:", err)
 		req.RespondError(WrapIOError(err))
 		return
 	}
@@ -145,6 +140,22 @@ func (nd *NodeData) handleLookupRequest(req *fuse.LookupRequest) {
 		EntryValid: DURATION_DEFAULT,
 		Attr:       newNode.GetAttr(),
 	})
+}
+
+func (nd *NodeData) handleRemoveRequest(req *fuse.RemoveRequest) {
+	fullPath := path.Join(nd.Cfs.OverlayDir, nd.Path, req.Name)
+
+	var err error
+	if req.Dir {
+		err = syscall.Rmdir(fullPath)
+	} else {
+		err = syscall.Unlink(fullPath)
+	}
+	if err != nil {
+		req.RespondError(WrapIOError(err))
+	} else {
+		req.Respond()
+	}
 }
 
 func (nd *NodeData) handleAccessRequest(req *fuse.AccessRequest) {
@@ -234,7 +245,7 @@ func (nd *NodeData) handleOpenRequest(req *fuse.OpenRequest) {
 			return
 		}
 
-		handle, err = CreateFileHandle(nd, int(req.Flags), 0)
+		handle, err = CreateFileHandle(nd, int(req.Flags))
 	}
 
 	if err != nil {
@@ -293,6 +304,7 @@ func (nd *NodeData) handleCreateRequest(req *fuse.CreateRequest) {
 	// TODO: There's a race condition where the node may have already been
 	// created.
 	newNode.Node = nd.Cfs.AddNode(newNode)
+	handleId := nd.Cfs.AddHandle(CreateFileHandleFromFD(nd, fd, int(req.Flags)))
 
 	req.Respond(&fuse.CreateResponse{
 		LookupResponse: fuse.LookupResponse{
@@ -319,7 +331,12 @@ func (nd *NodeData) handleReleaseRequest(req *fuse.ReleaseRequest) {
 		})
 		return
 	}
-	hd.Release(req)
+
+	err := hd.Release()
+	if err != nil {
+		req.RespondError(WrapIOError(err))
+		return
+	}
 
 	nd.Cfs.HandleMapLock.Lock()
 	delete(nd.Cfs.HandleMap, req.Handle)
@@ -416,6 +433,10 @@ func (cfs *CasFS) handleRequest(req fuse.Request) {
 		nd.handleOpenRequest(req.(*fuse.OpenRequest))
 	case *fuse.CreateRequest:
 		nd.handleCreateRequest(req.(*fuse.CreateRequest))
+	case *fuse.RemoveRequest:
+		nd.handleRemoveRequest(req.(*fuse.RemoveRequest))
+
+// fsync, forget
 
 	// Handle methods
 	case *fuse.ReleaseRequest:
@@ -433,7 +454,7 @@ func (cfs *CasFS) handleRequest(req fuse.Request) {
 	}
 }
 
-func (cfs *CasFS) serve() {
+func (cfs *CasFS) Serve() {
 	for {
 		req, err := cfs.Conn.ReadRequest()
 		if err != nil {
@@ -441,86 +462,5 @@ func (cfs *CasFS) serve() {
 			return
 		}
 		go cfs.handleRequest(req)
-	}
-}
-
-func testIt(cfs *CasFS) {
-	// err := syscall.Access(cfs.MountDir, 0777)
-	/*
-		err := syscall.Access(cfs.MountDir, 07)
-		fmt.Println("Test Access:", err)
-
-		rootStat, err := doLstat(cfs.MountDir)
-		fmt.Println("Test Stat:", rootStat, err)
-
-		fd, err := syscall.Open(cfs.MountDir, syscall.O_DIRECTORY, 0)
-		fmt.Println("Mount open:", fd, err)
-
-		var data [300]byte
-		n, err := syscall.ReadDirent(fd, data[:])
-		fmt.Println(n, data, err)
-
-		syscall.Close(fd)
-	*/
-
-	fd, err := syscall.Open(cfs.OverlayDir, syscall.O_DIRECTORY, 0)
-
-	var data [200]byte
-	n, err := syscall.ReadDirent(fd, data[:])
-	fmt.Println(n, err, data)
-
-	syscall.Close(fd)
-}
-
-func main() {
-	pflag.Parse()
-
-	if pflag.NArg() != 2 {
-		fmt.Println("Must specify mount point and mirror directory")
-		os.Exit(1)
-	}
-
-	syscall.Umask(0)
-
-	cfs, err := CreateCasFS(pflag.Arg(0), pflag.Arg(1))
-	if err != nil {
-		fmt.Println("Failed to initialize:", err)
-		os.Exit(1)
-	}
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	cfs.Conn, err = fuse.Mount(cfs.MountDir)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	go cfs.serve()
-	go testIt(cfs)
-
-	select {
-	case err := <-cfs.Fail:
-		fmt.Println(err)
-	case sig := <-sigs:
-		fmt.Println("signal received: ", sig)
-	}
-	err = fuse.Unmount(cfs.MountDir)
-	if err != nil {
-		fmt.Println("Could not unmount:", err)
-		os.Exit(1)
-	}
-
-	err = cfs.Conn.Close()
-
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
 	}
 }

@@ -1,10 +1,9 @@
-package main
+package fusefs
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"sync"
 	"syscall"
@@ -13,36 +12,33 @@ import (
 )
 
 type FileHandle struct {
-	// TODO: Switch to using syscalls only for file handling.
-	File				*os.File
+	FileDescriptor	int
+	OpenFlags				int
 
-	accessLock	sync.Mutex
+	accessLock			sync.Mutex
 }
 
-func CreateFileHandle(nd *NodeData, flag int, perm os.FileMode) (*FileHandle, error) {
-	fh, err := os.OpenFile(path.Join(nd.Cfs.OverlayDir, nd.Path), flag, perm)
+func CreateFileHandle(nd *NodeData, flags int) (*FileHandle, error) {
+	fd, err := syscall.Open(path.Join(nd.Cfs.OverlayDir, nd.Path), flags, 0)
 	if err != nil {
 		return nil, err
 	}
 	return &FileHandle{
-		File: fh,
+		FileDescriptor: fd,
+		OpenFlags: flags,
 	}, nil
 }
 
-func CreateFileHandleFromFD(nd *NodeData, fd int, perm os.FileMode) (*FileHandle, error) {
-	fh, err := os.OpenFile(path.Join(nd.Cfs.OverlayDir, nd.Path), flag, perm)
-	if err != nil {
-		return nil, err
-	}
+func CreateFileHandleFromFD(nd *NodeData, fd int, flags int) *FileHandle {
 	return &FileHandle{
-		File: fh,
-	}, nil
+		FileDescriptor: fd,
+		OpenFlags: flags,
+	}
 }
 
 
-func (hd *FileHandle) Release(req *fuse.ReleaseRequest) {
-	fmt.Println("Release:", hd.File)
-	hd.File.Close()
+func (hd *FileHandle) Release() error {
+	return syscall.Close(hd.FileDescriptor)
 }
 
 func (hd *FileHandle) Read(req *fuse.ReadRequest) {
@@ -61,7 +57,7 @@ func (hd *FileHandle) Read(req *fuse.ReadRequest) {
 	totalBytesRead := 0
 
 	for totalBytesRead < req.Size {
-		bytesRead, err := hd.File.ReadAt(buf[totalBytesRead:], req.Offset+int64(totalBytesRead))
+		bytesRead, err := syscall.Pread(hd.FileDescriptor, buf[totalBytesRead:], req.Offset+int64(totalBytesRead))
 
 		totalBytesRead += bytesRead
 		if err == io.EOF {
@@ -88,11 +84,11 @@ func (hd *FileHandle) Write(req *fuse.WriteRequest) {
 
 	totalBytesWritten := 0
 	for totalBytesWritten < len(req.Data) {
-		bytesWritten, err := hd.File.WriteAt(req.Data[totalBytesWritten:], req.Offset + int64(totalBytesWritten))
+		bytesWritten, err := syscall.Pwrite(hd.FileDescriptor, req.Data[totalBytesWritten:], req.Offset + int64(totalBytesWritten))
 
 		totalBytesWritten += bytesWritten
 		if err != nil {
-			fmt.Println("Error:", hd.File, err)
+			fmt.Println("Error:", hd.FileDescriptor, err)
 			req.RespondError(WrapIOError(err))
 			return
 		}
