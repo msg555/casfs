@@ -73,15 +73,15 @@ func addDirEntry(buf []byte, name string, stat *syscall.Stat_t) int {
 	}
 
 	if stat == nil {
-		hbo.PutUint64(buf[0:], uint64(FUSE_UNKNOWN_INO))
-		hbo.PutUint64(buf[8:], 0)
-		hbo.PutUint32(buf[16:], uint32(len(name)))
-		hbo.PutUint32(buf[20:], 0)
+		casfs.Hbo.PutUint64(buf[0:], uint64(FUSE_UNKNOWN_INO))
+		casfs.Hbo.PutUint64(buf[8:], 0)
+		casfs.Hbo.PutUint32(buf[16:], uint32(len(name)))
+		casfs.Hbo.PutUint32(buf[20:], 0)
 	} else {
-		hbo.PutUint64(buf[0:], uint64(FUSE_UNKNOWN_INO))
-		hbo.PutUint64(buf[8:], 0)
-		hbo.PutUint32(buf[16:], uint32(len(name)))
-		hbo.PutUint32(buf[20:], 0)
+		casfs.Hbo.PutUint64(buf[0:], uint64(FUSE_UNKNOWN_INO))
+		casfs.Hbo.PutUint64(buf[8:], 0)
+		casfs.Hbo.PutUint32(buf[16:], uint32(len(name)))
+		casfs.Hbo.PutUint32(buf[20:], 0)
 	}
 	copy(buf[24:], name)
 	for i := entryBaseLen; i < entryPadLen; i++ {

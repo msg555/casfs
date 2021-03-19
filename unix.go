@@ -1,4 +1,4 @@
-package fusefs
+package casfs
 
 import (
 	"os"
@@ -6,9 +6,20 @@ import (
 )
 
 func S_ISDIR(mode uint32) bool {
-	return ((mode & 0170000) == 0040000)
+	return ((mode & syscall.S_IFMT) == syscall.S_IFDIR)
 }
 
+func S_ISREG(mode uint32) bool {
+	return ((mode & syscall.S_IFMT) == syscall.S_IFREG)
+}
+
+func S_ISBLK(mode uint32) bool {
+	return ((mode & syscall.S_IFMT) == syscall.S_IFBLK)
+}
+
+func S_ISCHR(mode uint32) bool {
+	return ((mode & syscall.S_IFMT) == syscall.S_IFCHR)
+}
 
 func UnixToFileStatMode(unixMode uint32) os.FileMode {
 	fsMode := os.FileMode(unixMode & 0777)

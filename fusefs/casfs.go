@@ -390,6 +390,25 @@ func (nd *NodeData) handleFlushRequest(req *fuse.FlushRequest) {
 	hd.Flush(req)
 }
 
+func (nd *NodeData) handleIoctlRequest(req *fuse.IoctlRequest) {
+	nd.Cfs.HandleMapLock.RLock()
+	_, ok := nd.Cfs.HandleMap[req.Handle]
+	nd.Cfs.HandleMapLock.RUnlock()
+	if !ok {
+		req.RespondError(FuseError{
+			source: errors.New("invalid file handle"),
+			errno:  syscall.EBADF,
+		})
+		return
+	}
+
+	fmt.Println("INDATA:", len(req.InData), req.InData)
+	req.Respond(&fuse.IoctlResponse{
+		Result: 555,
+		Data: []byte{10, 0, 0, 0, 8, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0},
+	})
+}
+
 func (cfs *CasFS) handleStatfsRequest(req *fuse.StatfsRequest) {
 	req.Respond(&fuse.StatfsResponse{
 		Blocks:  cfs.OverlayStatfs.Blocks,
@@ -447,6 +466,8 @@ func (cfs *CasFS) handleRequest(req fuse.Request) {
 		nd.handleWriteRequest(req.(*fuse.WriteRequest))
 	case *fuse.FlushRequest:
 		nd.handleFlushRequest(req.(*fuse.FlushRequest))
+	case *fuse.IoctlRequest:
+		nd.handleIoctlRequest(req.(*fuse.IoctlRequest))
 
 	default:
 		fmt.Println("WARNING NOT IMPLEMENTED:", req)
