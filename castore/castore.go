@@ -1,9 +1,8 @@
 // TODO: GC
 
-package main
+package castore
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -98,27 +97,4 @@ func (cas *Castore) Insert(data io.Reader) (ContentAddress, error) {
 	}
 
 	return h, nil
-}
-
-func main() {
-	fmt.Println("Hi")
-
-	cas, err := CreateCastore("test", nil)
-	if err != nil {
-		panic(err)
-	}
-
-	r := bytes.NewReader([]byte("Hello world!\njk\n"))
-	addr, err := cas.Insert(r)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("Got address:", addr)
-
-	fread, err := cas.Open(addr)
-	if err != nil {
-		panic(err)
-	}
-	io.Copy(os.Stdout, fread)
 }

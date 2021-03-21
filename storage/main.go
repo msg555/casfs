@@ -4,15 +4,17 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 
 	"os"
+	"os/user"
+	"path"
 	"sort"
 	"syscall"
 	"unsafe"
 
 	"github.com/msg555/casfs"
+	"github.com/msg555/casfs/castore"
 )
 
 const AT_SYMLINK_NOFOLLOW = 0x100
@@ -34,8 +36,9 @@ type HostInode struct {
 }
 
 type StorageContext struct {
-	Hasher		hash.Hash
-	InodeMap	map[HostInode]*StorageNode
+	InodeMap		map[HostInode]*StorageNode
+	Cas					*castore.Castore
+	HashFactory	castore.HashFactory
 }
 
 type StorageNode struct {
@@ -57,8 +60,7 @@ func (nd *StorageNode) ComputeNodeHash(sc *StorageContext) {
 	casfs.Hbo.PutUint64(buf[28:], uint64(nd.Stat.Mtim.Nano()))
 	casfs.Hbo.PutUint64(buf[36:], uint64(nd.Stat.Ctim.Nano()))
 
-	h := sc.Hasher
-	h.Reset()
+	h := sc.HashFactory()
 	h.Write(buf[:])
 	h.Write(nd.ContentHash)
 
@@ -113,8 +115,7 @@ func (sc *StorageContext) ImportSpecial(st *syscall.Stat_t) (*StorageNode, error
 		return nd, nil
 	}
 
-	h := sc.Hasher
-	h.Reset()
+	h := sc.HashFactory()
 	switch st.Mode & syscall.S_IFMT {
 		case syscall.S_IFLNK:
 			// readlinkat
@@ -132,6 +133,18 @@ func (sc *StorageContext) ImportSpecial(st *syscall.Stat_t) (*StorageNode, error
 	return nd, nil
 }
 
+type fdReader struct {
+	FileDescriptor int
+}
+
+func (f fdReader) Read(buf []byte) (int, error) {
+	n, err := syscall.Read(f.FileDescriptor, buf)
+	if err == nil && n == 0 {
+		return 0, io.EOF
+	}
+	return n, err
+}
+
 func (sc *StorageContext) ImportFile(fd int, st *syscall.Stat_t) (*StorageNode, error) {
 	hostInode := HostInode{
 		Device: st.Dev,
@@ -145,24 +158,15 @@ func (sc *StorageContext) ImportFile(fd int, st *syscall.Stat_t) (*StorageNode, 
 	if !casfs.S_ISREG(st.Mode) {
 		return nil, errors.New("must be called on regular file")
 	}
-	h := sc.Hasher
-	h.Reset()
 
-	buf := make([]byte, 1 << 16)
-	for {
-		bytesRead, err := syscall.Read(fd, buf)
-		if err != nil {
-			return nil, err
-		}
-		if bytesRead == 0 {
-			break
-		}
-		h.Write(buf[:bytesRead])
+	addr, err := sc.Cas.Insert(fdReader{FileDescriptor: fd})
+	if err != nil {
+		return nil, err
 	}
 
 	nd = &StorageNode{
 		Stat: *st,
-		ContentHash: h.Sum(nil),
+		ContentHash: addr,
 	}
 	nd.ComputeNodeHash(sc)
 
@@ -260,8 +264,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 		}
 	}
 
-	h := sc.Hasher
-	h.Reset()
+	h := sc.HashFactory()
 
 	childPaths := make([]string, 0, len(nd.Children))
 	for path := range nd.Children {
@@ -303,9 +306,21 @@ func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 }
 
 func main() {
+	usr, err := user.Current()
+	if err != nil {
+		panic(err)
+	}
+
+	hashFactory := sha256.New
+	cas, err := castore.CreateCastore(path.Join(usr.HomeDir, ".castore"), hashFactory)
+	if err != nil {
+		panic(err)
+	}
+
 	sc := StorageContext{
-		Hasher: sha256.New(),
 		InodeMap: make(map[HostInode]*StorageNode),
+		HashFactory: hashFactory,
+		Cas: cas,
 	}
 	for _, dir := range os.Args[1:] {
 		_, err := sc.ImportPath(dir)
