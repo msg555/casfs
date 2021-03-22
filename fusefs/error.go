@@ -2,14 +2,14 @@ package fusefs
 
 import (
 	"os"
-	"syscall"
 
 	"bazil.org/fuse"
+	"golang.org/x/sys/unix"
 )
 
 type FuseError struct {
 	source error
-	errno  syscall.Errno
+	errno  unix.Errno
 }
 
 func (err FuseError) Error() string {
@@ -26,15 +26,15 @@ func WrapIOError(err error) FuseError {
 		switch e.(type) {
 		case *os.PathError:
 			e = e.(*os.PathError).Err
-		case syscall.Errno:
+		case unix.Errno:
 			return FuseError{
 				source: err,
-				errno:  e.(syscall.Errno),
+				errno:  e.(unix.Errno),
 			}
 		default:
 			return FuseError{
 				source: err,
-				errno:  syscall.EIO,
+				errno:  unix.EIO,
 			}
 		}
 	}

@@ -10,11 +10,11 @@ import (
 	"os/user"
 	"path"
 	"sort"
-	"syscall"
 	"unsafe"
 
 	"github.com/msg555/casfs"
 	"github.com/msg555/casfs/castore"
+	"golang.org/x/sys/unix"
 )
 
 const AT_SYMLINK_NOFOLLOW = 0x100
@@ -42,7 +42,7 @@ type StorageContext struct {
 }
 
 type StorageNode struct {
-	Stat				syscall.Stat_t
+	Stat				unix.Stat_t
 	Children		map[string]*StorageNode
 	ContentHash	[]byte
 	NodeHash		[]byte
@@ -81,14 +81,14 @@ func (nd *StorageNode) ComputeNodeHash(sc *StorageContext) {
 	nd.NodeHash = h.Sum(nil)
 }
 
-func Fstatat(dirfd int, pathname string, stat *syscall.Stat_t, flags int) error {
+func Fstatat(dirfd int, pathname string, stat *unix.Stat_t, flags int) error {
 	var p *byte
-	p, err := syscall.BytePtrFromString(pathname)
+	p, err := unix.BytePtrFromString(pathname)
 	if err != nil {
 		return err
 	}
 
-	_, _, errno := syscall.Syscall6(syscall.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
+	_, _, errno := unix.Syscall6(unix.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
 	if errno != 0 {
 		return errno
 	}
@@ -105,7 +105,7 @@ func NullTerminatedString(data []byte) string {
 	return string(data)
 }
 
-func (sc *StorageContext) ImportSpecial(st *syscall.Stat_t) (*StorageNode, error) {
+func (sc *StorageContext) ImportSpecial(st *unix.Stat_t) (*StorageNode, error) {
 	hostInode := HostInode{
 		Device: st.Dev,
 		Inode: st.Ino,
@@ -116,8 +116,8 @@ func (sc *StorageContext) ImportSpecial(st *syscall.Stat_t) (*StorageNode, error
 	}
 
 	h := sc.HashFactory()
-	switch st.Mode & syscall.S_IFMT {
-		case syscall.S_IFLNK:
+	switch st.Mode & unix.S_IFMT {
+		case unix.S_IFLNK:
 			// readlinkat
 		default:
 			return nil, errors.New("unsupported special file type")
@@ -138,14 +138,14 @@ type fdReader struct {
 }
 
 func (f fdReader) Read(buf []byte) (int, error) {
-	n, err := syscall.Read(f.FileDescriptor, buf)
+	n, err := unix.Read(f.FileDescriptor, buf)
 	if err == nil && n == 0 {
 		return 0, io.EOF
 	}
 	return n, err
 }
 
-func (sc *StorageContext) ImportFile(fd int, st *syscall.Stat_t) (*StorageNode, error) {
+func (sc *StorageContext) ImportFile(fd int, st *unix.Stat_t) (*StorageNode, error) {
 	hostInode := HostInode{
 		Device: st.Dev,
 		Inode: st.Ino,
@@ -174,7 +174,7 @@ func (sc *StorageContext) ImportFile(fd int, st *syscall.Stat_t) (*StorageNode, 
 	return nd, nil
 }
 
-func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageNode, error) {
+func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode, error) {
 	if !casfs.S_ISDIR(st.Mode) {
 		return nil, errors.New("must be called on directory")
 	}
@@ -186,7 +186,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 
 	buf := make([]byte, 1 << 16)
 	for {
-		bytesRead, err := syscall.Getdents(fd, buf)
+		bytesRead, err := unix.Getdents(fd, buf)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +216,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 
 			switch tp {
 				case DT_FIFO, DT_CHR, DT_BLK, DT_LNK, DT_SOCK:
-					var childSt syscall.Stat_t
+					var childSt unix.Stat_t
 					err = Fstatat(fd, path, &childSt, AT_SYMLINK_NOFOLLOW)
 					if err != nil {
 						return nil, err
@@ -229,15 +229,15 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 					fmt.Println("Special:", path, childNd.ContentHash)
 					nd.Children[path] = childNd
 				case DT_REG, DT_DIR:
-					childFd, err := syscall.Openat(fd, path, syscall.O_RDONLY, 0)
+					childFd, err := unix.Openat(fd, path, unix.O_RDONLY, 0)
 					if err != nil {
 						return nil, err
 					}
 
-					var childSt syscall.Stat_t
-					err = syscall.Fstat(childFd, &childSt)
+					var childSt unix.Stat_t
+					err = unix.Fstat(childFd, &childSt)
 					if err != nil {
-						syscall.Close(childFd)
+						unix.Close(childFd)
 						return nil, err
 					}
 
@@ -250,11 +250,11 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 					nd.Children[path] = childNd
 
 					if err != nil {
-						syscall.Close(childFd)
+						unix.Close(childFd)
 						return nil, err
 					}
 
-					err = syscall.Close(childFd)
+					err = unix.Close(childFd)
 					if err != nil {
 						return nil, err
 					}
@@ -264,30 +264,13 @@ func (sc *StorageContext) ImportDirectory(fd int, st *syscall.Stat_t) (*StorageN
 		}
 	}
 
-	h := sc.HashFactory()
-
-	childPaths := make([]string, 0, len(nd.Children))
-	for path := range nd.Children {
-		childPaths = append(childPaths, path)
-	}
-	sort.Strings(childPaths)
-
-	for _, path := range childPaths {
-		childNd := nd.Children[path]
-
-		io.WriteString(h, path)
-		h.Write([]byte{0})
-		h.Write(childNd.ContentHash)
-	}
-	nd.ContentHash = h.Sum(nil)
-
 	nd.ComputeNodeHash(sc)
 	return &nd, nil
 }
 
 func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
-	var st syscall.Stat_t
-	err := syscall.Stat(pathname, &st)
+	var st unix.Stat_t
+	err := unix.Stat(pathname, &st)
 	if err != nil {
 		return nil, err
 	}
@@ -296,11 +279,11 @@ func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 		return nil, errors.New("root import path must be a directory")
 	}
 
-	fd, err := syscall.Open(pathname, syscall.O_RDONLY, 0)
+	fd, err := unix.Open(pathname, unix.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer syscall.Close(fd)
+	defer unix.Close(fd)
 
 	return sc.ImportDirectory(fd, &st)
 }

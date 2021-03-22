@@ -6,9 +6,9 @@ import (
 	"io"
 	"path"
 	"sync"
-	"syscall"
 
 	"bazil.org/fuse"
+	"golang.org/x/sys/unix"
 )
 
 type FileHandle struct {
@@ -19,7 +19,7 @@ type FileHandle struct {
 }
 
 func CreateFileHandle(nd *NodeData, flags int) (*FileHandle, error) {
-	fd, err := syscall.Open(path.Join(nd.Cfs.OverlayDir, nd.Path), flags, 0)
+	fd, err := unix.Open(path.Join(nd.Cfs.OverlayDir, nd.Path), flags, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -38,14 +38,14 @@ func CreateFileHandleFromFD(nd *NodeData, fd int, flags int) *FileHandle {
 
 
 func (hd *FileHandle) Release() error {
-	return syscall.Close(hd.FileDescriptor)
+	return unix.Close(hd.FileDescriptor)
 }
 
 func (hd *FileHandle) Read(req *fuse.ReadRequest) {
 	if req.Dir {
 		req.RespondError(FuseError{
 			source: errors.New("not a a directory"),
-			errno:  syscall.ENOTDIR,
+			errno:  unix.ENOTDIR,
 		})
 		return
 	}
@@ -57,7 +57,7 @@ func (hd *FileHandle) Read(req *fuse.ReadRequest) {
 	totalBytesRead := 0
 
 	for totalBytesRead < req.Size {
-		bytesRead, err := syscall.Pread(hd.FileDescriptor, buf[totalBytesRead:], req.Offset+int64(totalBytesRead))
+		bytesRead, err := unix.Pread(hd.FileDescriptor, buf[totalBytesRead:], req.Offset+int64(totalBytesRead))
 
 		totalBytesRead += bytesRead
 		if err == io.EOF {
@@ -84,7 +84,7 @@ func (hd *FileHandle) Write(req *fuse.WriteRequest) {
 
 	totalBytesWritten := 0
 	for totalBytesWritten < len(req.Data) {
-		bytesWritten, err := syscall.Pwrite(hd.FileDescriptor, req.Data[totalBytesWritten:], req.Offset + int64(totalBytesWritten))
+		bytesWritten, err := unix.Pwrite(hd.FileDescriptor, req.Data[totalBytesWritten:], req.Offset + int64(totalBytesWritten))
 
 		totalBytesWritten += bytesWritten
 		if err != nil {

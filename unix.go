@@ -2,50 +2,51 @@ package casfs
 
 import (
 	"os"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func S_ISDIR(mode uint32) bool {
-	return ((mode & syscall.S_IFMT) == syscall.S_IFDIR)
+	return ((mode & unix.S_IFMT) == unix.S_IFDIR)
 }
 
 func S_ISREG(mode uint32) bool {
-	return ((mode & syscall.S_IFMT) == syscall.S_IFREG)
+	return ((mode & unix.S_IFMT) == unix.S_IFREG)
 }
 
 func S_ISBLK(mode uint32) bool {
-	return ((mode & syscall.S_IFMT) == syscall.S_IFBLK)
+	return ((mode & unix.S_IFMT) == unix.S_IFBLK)
 }
 
 func S_ISCHR(mode uint32) bool {
-	return ((mode & syscall.S_IFMT) == syscall.S_IFCHR)
+	return ((mode & unix.S_IFMT) == unix.S_IFCHR)
 }
 
 func UnixToFileStatMode(unixMode uint32) os.FileMode {
 	fsMode := os.FileMode(unixMode & 0777)
-	switch unixMode & syscall.S_IFMT {
-	case syscall.S_IFBLK:
+	switch unixMode & unix.S_IFMT {
+	case unix.S_IFBLK:
 		fsMode |= os.ModeDevice
-	case syscall.S_IFCHR:
+	case unix.S_IFCHR:
 		fsMode |= os.ModeDevice | os.ModeCharDevice
-	case syscall.S_IFDIR:
+	case unix.S_IFDIR:
 		fsMode |= os.ModeDir
-	case syscall.S_IFIFO:
+	case unix.S_IFIFO:
 		fsMode |= os.ModeNamedPipe
-	case syscall.S_IFLNK:
+	case unix.S_IFLNK:
 		fsMode |= os.ModeSymlink
-	case syscall.S_IFREG:
+	case unix.S_IFREG:
 		// nothing to do
-	case syscall.S_IFSOCK:
+	case unix.S_IFSOCK:
 		fsMode |= os.ModeSocket
 	}
-	if (unixMode & syscall.S_ISGID) != 0 {
+	if (unixMode & unix.S_ISGID) != 0 {
 		fsMode |= os.ModeSetgid
 	}
-	if (unixMode & syscall.S_ISUID) != 0 {
+	if (unixMode & unix.S_ISUID) != 0 {
 		fsMode |= os.ModeSetuid
 	}
-	if (unixMode & syscall.S_ISVTX) != 0 {
+	if (unixMode & unix.S_ISVTX) != 0 {
 		fsMode |= os.ModeSticky
 	}
 	return fsMode
@@ -55,28 +56,28 @@ func UnixToFileStatMode(unixMode uint32) os.FileMode {
 func FileStatToUnixMode(fsMode os.FileMode) uint32 {
 	unixMode := uint32(fsMode & 0777)
 	if (fsMode & os.ModeCharDevice) != 0 {
-		unixMode |= syscall.S_IFCHR
+		unixMode |= unix.S_IFCHR
 	} else if (fsMode & os.ModeDevice) != 0 {
-		unixMode |= syscall.S_IFBLK
+		unixMode |= unix.S_IFBLK
 	} else if (fsMode & os.ModeDir) != 0 {
-		unixMode |= syscall.S_IFDIR
+		unixMode |= unix.S_IFDIR
 	} else if (fsMode & os.ModeNamedPipe) != 0 {
-		unixMode |= syscall.S_IFIFO
+		unixMode |= unix.S_IFIFO
 	} else if (fsMode & os.ModeSymlink) != 0 {
-		unixMode |= syscall.S_IFLNK
+		unixMode |= unix.S_IFLNK
 	} else if (fsMode & os.ModeSocket) != 0 {
-		unixMode |= syscall.S_IFSOCK
+		unixMode |= unix.S_IFSOCK
 	} else {
-		unixMode |= syscall.S_IFREG
+		unixMode |= unix.S_IFREG
 	}
 	if (fsMode & os.ModeSetgid) != 0 {
-		unixMode |= syscall.S_ISGID
+		unixMode |= unix.S_ISGID
 	}
 	if (fsMode & os.ModeSetuid) != 0 {
-		unixMode |= syscall.S_ISUID
+		unixMode |= unix.S_ISUID
 	}
 	if (fsMode & os.ModeSticky) != 0 {
-		unixMode |= syscall.S_ISVTX
+		unixMode |= unix.S_ISVTX
 	}
 	return unixMode
 }

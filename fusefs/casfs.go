@@ -15,10 +15,11 @@ import (
 	"fmt"
 	"path"
 	"sync"
-	"syscall"
 	"time"
 
 	"bazil.org/fuse"
+	"github.com/msg555/casfs"
+	"golang.org/x/sys/unix"
 )
 
 const DURATION_DEFAULT time.Duration = time.Duration(1000000000 * 60 * 60)
@@ -28,7 +29,7 @@ type CasFS struct {
 	Fail          chan error
 	MountDir      string
 	OverlayDir    string
-	OverlayStatfs syscall.Statfs_t
+	OverlayStatfs unix.Statfs_t
 
 	NodeMapLock   sync.RWMutex
 	NodeMap       map[fuse.NodeID]*NodeData
@@ -53,7 +54,7 @@ func CreateCasFS(mountDir, overlayDir string) (*CasFS, error) {
 		NextHandleId:  1,
 	}
 
-	err := syscall.Statfs(cfs.OverlayDir, &cfs.OverlayStatfs)
+	err := unix.Statfs(cfs.OverlayDir, &cfs.OverlayStatfs)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +63,7 @@ func CreateCasFS(mountDir, overlayDir string) (*CasFS, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !S_ISDIR(rootStat.Mode) {
+	if !casfs.S_ISDIR(rootStat.Mode) {
 		return nil, err
 	}
 	cfs.NodeMap[FUSE_ROOT_ID] = &NodeData{
@@ -94,9 +95,9 @@ func (cfs *CasFS) AddHandle(handle HandleData) fuse.HandleID {
 	return handleId
 }
 
-func doLstat(path string) (syscall.Stat_t, error) {
-	var st syscall.Stat_t
-	err := syscall.Lstat(path, &st)
+func doLstat(path string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	err := unix.Lstat(path, &st)
 	return st, err
 }
 
@@ -147,9 +148,9 @@ func (nd *NodeData) handleRemoveRequest(req *fuse.RemoveRequest) {
 
 	var err error
 	if req.Dir {
-		err = syscall.Rmdir(fullPath)
+		err = unix.Rmdir(fullPath)
 	} else {
-		err = syscall.Unlink(fullPath)
+		err = unix.Unlink(fullPath)
 	}
 	if err != nil {
 		req.RespondError(WrapIOError(err))
@@ -164,7 +165,7 @@ func (nd *NodeData) handleAccessRequest(req *fuse.AccessRequest) {
 	} else {
 		req.RespondError(FuseError{
 			source: errors.New("permission denied"),
-			errno:  syscall.EACCES,
+			errno:  unix.EACCES,
 		})
 	}
 }
@@ -177,7 +178,7 @@ func (nd *NodeData) handleGetattrRequest(req *fuse.GetattrRequest) {
 
 func (nd *NodeData) handleSetattrRequest(req *fuse.SetattrRequest) {
 	if (req.Valid & fuse.SetattrMode) != 0 {
-		nd.Stat.Mode = FileStatToUnixMode(req.Mode)
+		nd.Stat.Mode = casfs.FileStatToUnixMode(req.Mode)
 	}
 
 	req.Respond(&fuse.SetattrResponse{
@@ -188,41 +189,41 @@ func (nd *NodeData) handleSetattrRequest(req *fuse.SetattrRequest) {
 func (nd *NodeData) handleGetxattrRequest(req *fuse.GetxattrRequest) {
 	req.RespondError(FuseError{
 		source: errors.New("xattr not supported"),
-		errno:  syscall.ENODATA,
+		errno:  unix.ENODATA,
 	})
 }
 
 func (nd *NodeData) handleOpenRequest(req *fuse.OpenRequest) {
-	if req.Dir && !S_ISDIR(nd.Stat.Mode) {
+	if req.Dir && !casfs.S_ISDIR(nd.Stat.Mode) {
 		req.RespondError(FuseError{
 			source: errors.New("not a directory"),
-			errno:  syscall.ENOTDIR,
+			errno:  unix.ENOTDIR,
 		})
 		return
 	}
 
-	if (req.Flags & syscall.O_CREAT) != 0 {
+	if (req.Flags & unix.O_CREAT) != 0 {
 		panic("invalid O_CREAT flag")
 	}
 
 	isRead := req.Flags.IsReadOnly() || req.Flags.IsReadWrite()
 	isWrite := req.Flags.IsWriteOnly() || req.Flags.IsReadWrite()
 
-	if isWrite && S_ISDIR(nd.Stat.Mode) {
+	if isWrite && casfs.S_ISDIR(nd.Stat.Mode) {
 		req.RespondError(FuseError{
 			source: errors.New("cannot write to a directory"),
-			errno:  syscall.EISDIR,
+			errno:  unix.EISDIR,
 		})
 		return
 	}
 
 	var handle HandleData
 	var err error
-	if S_ISDIR(nd.Stat.Mode) {
+	if casfs.S_ISDIR(nd.Stat.Mode) {
 		if !nd.TestAccess(req, 4) {
 			req.RespondError(FuseError{
 				source: errors.New("permission denied"),
-				errno:  syscall.EACCES,
+				errno:  unix.EACCES,
 			})
 			return
 		}
@@ -240,7 +241,7 @@ func (nd *NodeData) handleOpenRequest(req *fuse.OpenRequest) {
 		if !nd.TestAccess(req, accessMode) {
 			req.RespondError(FuseError{
 				source: errors.New("permission denied"),
-				errno:  syscall.EACCES,
+				errno:  unix.EACCES,
 			})
 			return
 		}
@@ -274,17 +275,17 @@ func (nd *NodeData) handleCreateRequest(req *fuse.CreateRequest) {
 	if ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EEXIST,
+			errno:  unix.EEXIST,
 		})
 		return
 	}
 
-	if (req.Flags & syscall.O_CREAT) == 0 {
+	if (req.Flags & unix.O_CREAT) == 0 {
 		panic("Create should have O_CREAT flag")
 	}
 
 	fullPath := path.Join(cfs.OverlayDir, lookupPath)
-	fd, err := syscall.Open(fullPath, int(req.Flags), uint32(req.Mode &^ req.Umask))
+	fd, err := unix.Open(fullPath, int(req.Flags), uint32(req.Mode &^ req.Umask))
 	if err != nil {
 		req.RespondError(WrapIOError(err))
 		return
@@ -295,7 +296,7 @@ func (nd *NodeData) handleCreateRequest(req *fuse.CreateRequest) {
 		Path: lookupPath,
 	}
 
-	err = syscall.Fstat(fd, &newNode.Stat)
+	err = unix.Fstat(fd, &newNode.Stat)
 	if err != nil {
 		req.RespondError(WrapIOError(err))
 		return
@@ -327,7 +328,7 @@ func (nd *NodeData) handleReleaseRequest(req *fuse.ReleaseRequest) {
 	if !ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EBADF,
+			errno:  unix.EBADF,
 		})
 		return
 	}
@@ -352,7 +353,7 @@ func (nd *NodeData) handleReadRequest(req *fuse.ReadRequest) {
 	if !ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EBADF,
+			errno:  unix.EBADF,
 		})
 		return
 	}
@@ -367,7 +368,7 @@ func (nd *NodeData) handleWriteRequest(req *fuse.WriteRequest) {
 	if !ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EBADF,
+			errno:  unix.EBADF,
 		})
 		return
 	}
@@ -382,7 +383,7 @@ func (nd *NodeData) handleFlushRequest(req *fuse.FlushRequest) {
 	if !ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EBADF,
+			errno:  unix.EBADF,
 		})
 		return
 	}
@@ -397,7 +398,7 @@ func (nd *NodeData) handleIoctlRequest(req *fuse.IoctlRequest) {
 	if !ok {
 		req.RespondError(FuseError{
 			source: errors.New("invalid file handle"),
-			errno:  syscall.EBADF,
+			errno:  unix.EBADF,
 		})
 		return
 	}

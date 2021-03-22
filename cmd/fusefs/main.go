@@ -4,40 +4,39 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
-
-	"github.com/msg555/casfs/fusefs"
 
 	"bazil.org/fuse"
   "github.com/spf13/pflag"
+	"github.com/msg555/casfs/fusefs"
+	"golang.org/x/sys/unix"
 )
 
 func testIt(cfs *fusefs.CasFS) {
-	// err := syscall.Access(cfs.MountDir, 0777)
+	// err := unix.Access(cfs.MountDir, 0777)
 	/*
-		err := syscall.Access(cfs.MountDir, 07)
+		err := unix.Access(cfs.MountDir, 07)
 		fmt.Println("Test Access:", err)
 
 		rootStat, err := doLstat(cfs.MountDir)
 		fmt.Println("Test Stat:", rootStat, err)
 
-		fd, err := syscall.Open(cfs.MountDir, syscall.O_DIRECTORY, 0)
+		fd, err := unix.Open(cfs.MountDir, unix.O_DIRECTORY, 0)
 		fmt.Println("Mount open:", fd, err)
 
 		var data [300]byte
-		n, err := syscall.ReadDirent(fd, data[:])
+		n, err := unix.ReadDirent(fd, data[:])
 		fmt.Println(n, data, err)
 
-		syscall.Close(fd)
+		unix.Close(fd)
 	*/
 
-	fd, err := syscall.Open(cfs.OverlayDir, syscall.O_DIRECTORY, 0)
+	fd, err := unix.Open(cfs.OverlayDir, unix.O_DIRECTORY, 0)
 
 	var data [200]byte
-	n, err := syscall.ReadDirent(fd, data[:])
+	n, err := unix.ReadDirent(fd, data[:])
 	fmt.Println(n, err, data)
 
-	syscall.Close(fd)
+	unix.Close(fd)
 }
 
 func main() {
@@ -48,7 +47,7 @@ func main() {
     os.Exit(1)
   }
 
-  syscall.Umask(0)
+  unix.Umask(0)
 
   cfs, err := fusefs.CreateCasFS(pflag.Arg(0), pflag.Arg(1))
   if err != nil {
@@ -57,7 +56,7 @@ func main() {
   }
 
   sigs := make(chan os.Signal, 1)
-  signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+  signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)
 
   cfs.Conn, err = fuse.Mount(cfs.MountDir)
   if err != nil {

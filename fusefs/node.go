@@ -1,17 +1,18 @@
 package fusefs
 
 import (
-	"syscall"
 	"time"
 
 	"bazil.org/fuse"
+	"github.com/msg555/casfs"
+	"golang.org/x/sys/unix"
 )
 
 type NodeData struct {
 	Cfs        *CasFS
 	Node       fuse.NodeID
 	Path       string
-	Stat       syscall.Stat_t
+	Stat       unix.Stat_t
 	ParentNode fuse.NodeID
 }
 
@@ -39,7 +40,7 @@ func (nd *NodeData) GetAttr() fuse.Attr {
 		Atime:     time.Unix(nd.Stat.Atim.Sec, nd.Stat.Atim.Nsec),
 		Mtime:     time.Unix(nd.Stat.Mtim.Sec, nd.Stat.Mtim.Nsec),
 		Ctime:     time.Unix(nd.Stat.Ctim.Sec, nd.Stat.Ctim.Nsec),
-		Mode:      UnixToFileStatMode(nd.Stat.Mode),
+		Mode:      casfs.UnixToFileStatMode(nd.Stat.Mode),
 		Nlink:     uint32(nd.Stat.Nlink),
 		Uid:       nd.Stat.Uid,
 		Gid:       nd.Stat.Gid,

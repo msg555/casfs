@@ -5,9 +5,10 @@ import (
 	"io"
 	"os"
 	"path"
-	"syscall"
 
 	"bazil.org/fuse"
+	"github.com/msg555/casfs"
+	"golang.org/x/sys/unix"
 )
 
 const MAX_BUFFER int = 4096
@@ -53,7 +54,7 @@ func direntAlign(x int) int {
 	return (x + 7) &^ 7
 }
 
-func addDirEntry(buf []byte, name string, stat *syscall.Stat_t) int {
+func addDirEntry(buf []byte, name string, stat *unix.Stat_t) int {
 	/*
 			define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 
@@ -95,7 +96,7 @@ func (hd *DirectoryHandle) Read(req *fuse.ReadRequest) {
 	if !req.Dir {
 		req.RespondError(FuseError{
 			source: errors.New("is a directory"),
-			errno:  syscall.EISDIR,
+			errno:  unix.EISDIR,
 		})
 		return
 	}
@@ -136,6 +137,6 @@ func (hd *DirectoryHandle) Flush(req *fuse.FlushRequest) {
 func (hd *DirectoryHandle) Write(req *fuse.WriteRequest) {
 	req.RespondError(FuseError{
 		source: errors.New("cannot write to a directory"),
-		errno:  syscall.EIO,
+		errno:  unix.EIO,
 	})
 }
