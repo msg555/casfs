@@ -5,7 +5,7 @@
 // Has a simple API for constructing the B-tree all at once or by writing
 // it record by record in sorted order.
 
-package main
+package btree
 
 import (
 	"errors"
@@ -142,7 +142,7 @@ func (tr *BTree) makeNode(key KeyType, value ValueType) ([]byte, error) {
 	return nodeData, nil
 }
 
-func (tr *BTree) Find(key string) ([]byte, error) {
+func (tr *BTree) Find(rootIndex int, key string) ([]byte, error) {
 	blockRaw := make([]byte, tr.FanOut * tr.nodeSize)
 
 	depth := 1
