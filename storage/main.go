@@ -26,28 +26,27 @@ const CONTENT_ADDRESS_LENGTH = 64
 const INODE_BUCKET_NAME = "inodes"
 
 type HostInode struct {
-	Device	uint64
-	Inode		uint64
+	Device uint64
+	Inode  uint64
 }
 
 type StorageContext struct {
-	InodeMap			map[HostInode]*StorageNode
-	Cas						*castore.Castore
-	HashFactory		castore.HashFactory
-	InodeBlocks		*blockfile.BlockFile
-	DirentTree		*btree.BTree
-	NodeDB				*bolt.DB
+	InodeMap    map[HostInode]*StorageNode
+	Cas         *castore.Castore
+	HashFactory castore.HashFactory
+	InodeBlocks *blockfile.BlockFile
+	DirentTree  *btree.BTree
+	NodeDB      *bolt.DB
 }
 
 type StorageNode struct {
-	NodeIndex		blockfile.BlockIndex
-	Stat				*InodeData
-	Children		map[string]*StorageNode
-	NodeHash		[]byte
+	NodeIndex blockfile.BlockIndex
+	Stat      *InodeData
+	Children  map[string]*StorageNode
+	NodeHash  []byte
 }
 
-
-func (sc* StorageContext) LookupAddressInode(address []byte) (blockfile.BlockIndex, error) {
+func (sc *StorageContext) LookupAddressInode(address []byte) (blockfile.BlockIndex, error) {
 	var result blockfile.BlockIndex
 	err := sc.NodeDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
@@ -63,9 +62,8 @@ func (sc* StorageContext) LookupAddressInode(address []byte) (blockfile.BlockInd
 	return result, nil
 }
 
-
 // Allocate a new inode and return a StorageNode to represent it.
-func (sc *StorageContext) CreateStorageNode(address []byte, st *unix.Stat_t, createCallback func(*InodeData)error) (*StorageNode, error) {
+func (sc *StorageContext) CreateStorageNode(address []byte, st *unix.Stat_t, createCallback func(*InodeData) error) (*StorageNode, error) {
 	stat := InodeFromStat(address, st)
 
 	var nodeIndex blockfile.BlockIndex
@@ -104,10 +102,9 @@ func (sc *StorageContext) CreateStorageNode(address []byte, st *unix.Stat_t, cre
 
 	return &StorageNode{
 		NodeIndex: nodeIndex,
-		Stat: stat,
+		Stat:      stat,
 	}, nil
 }
-
 
 func (nd *StorageNode) ComputeNodeHash(sc *StorageContext) {
 	h := sc.HashFactory()
@@ -146,7 +143,7 @@ func NullTerminatedString(data []byte) string {
 func (sc *StorageContext) ImportSpecial(st *unix.Stat_t) (*StorageNode, error) {
 	hostInode := HostInode{
 		Device: st.Dev,
-		Inode: st.Ino,
+		Inode:  st.Ino,
 	}
 	nd, found := sc.InodeMap[hostInode]
 	if found {
@@ -155,9 +152,10 @@ func (sc *StorageContext) ImportSpecial(st *unix.Stat_t) (*StorageNode, error) {
 
 	h := sc.HashFactory()
 	switch st.Mode & unix.S_IFMT {
-		case unix.S_IFLNK:
-			// readlinkat
-		default: return nil, errors.New("unsupported special file type")
+	case unix.S_IFLNK:
+		// readlinkat
+	default:
+		return nil, errors.New("unsupported special file type")
 	}
 
 	nd = &StorageNode{
@@ -184,7 +182,7 @@ func (f fdReader) Read(buf []byte) (int, error) {
 func (sc *StorageContext) ImportFile(fd int, st *unix.Stat_t) (*StorageNode, error) {
 	hostInode := HostInode{
 		Device: st.Dev,
-		Inode: st.Ino,
+		Inode:  st.Ino,
 	}
 	nd, found := sc.InodeMap[hostInode]
 	if found {
@@ -217,7 +215,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode
 
 	children := make(map[string]*StorageNode)
 
-	buf := make([]byte, 1 << 16)
+	buf := make([]byte, 1<<16)
 	for {
 		bytesRead, err := unix.Getdents(fd, buf)
 		if err != nil {
@@ -233,7 +231,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode
 			off := casfs.Hbo.Uint64(buf[pos+8:])
 			reclen := casfs.Hbo.Uint16(buf[pos+16:])
 			tp := uint8(buf[pos+18])
-			path := NullTerminatedString(buf[pos+19:pos+int(reclen)])
+			path := NullTerminatedString(buf[pos+19 : pos+int(reclen)])
 			pos += int(reclen)
 
 			if ino == 0 {
@@ -248,50 +246,50 @@ func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode
 			}
 
 			switch tp {
-				case DT_FIFO, DT_CHR, DT_BLK, DT_LNK, DT_SOCK:
-					var childSt unix.Stat_t
-					err = Fstatat(fd, path, &childSt, AT_SYMLINK_NOFOLLOW)
-					if err != nil {
-						return nil, err
-					}
+			case DT_FIFO, DT_CHR, DT_BLK, DT_LNK, DT_SOCK:
+				var childSt unix.Stat_t
+				err = Fstatat(fd, path, &childSt, AT_SYMLINK_NOFOLLOW)
+				if err != nil {
+					return nil, err
+				}
 
-					childNd, err := sc.ImportSpecial(&childSt)
-					if err != nil {
-						return nil, err
-					}
-					children[path] = childNd
-				case DT_REG, DT_DIR:
-					childFd, err := unix.Openat(fd, path, unix.O_RDONLY, 0)
-					if err != nil {
-						return nil, err
-					}
+				childNd, err := sc.ImportSpecial(&childSt)
+				if err != nil {
+					return nil, err
+				}
+				children[path] = childNd
+			case DT_REG, DT_DIR:
+				childFd, err := unix.Openat(fd, path, unix.O_RDONLY, 0)
+				if err != nil {
+					return nil, err
+				}
 
-					var childSt unix.Stat_t
-					err = unix.Fstat(childFd, &childSt)
-					if err != nil {
-						unix.Close(childFd)
-						return nil, err
-					}
+				var childSt unix.Stat_t
+				err = unix.Fstat(childFd, &childSt)
+				if err != nil {
+					unix.Close(childFd)
+					return nil, err
+				}
 
-					var childNd *StorageNode
-					if tp == DT_DIR {
-						childNd, err = sc.ImportDirectory(childFd, &childSt)
-					} else { // tp == DT_REG
-						childNd, err = sc.ImportFile(childFd, &childSt)
-					}
-					children[path] = childNd
+				var childNd *StorageNode
+				if tp == DT_DIR {
+					childNd, err = sc.ImportDirectory(childFd, &childSt)
+				} else { // tp == DT_REG
+					childNd, err = sc.ImportFile(childFd, &childSt)
+				}
+				children[path] = childNd
 
-					if err != nil {
-						unix.Close(childFd)
-						return nil, err
-					}
+				if err != nil {
+					unix.Close(childFd)
+					return nil, err
+				}
 
-					err = unix.Close(childFd)
-					if err != nil {
-						return nil, err
-					}
-				default:
-					return nil, errors.New("unexpected file type returned")
+				err = unix.Close(childFd)
+				if err != nil {
+					return nil, err
+				}
+			default:
+				return nil, errors.New("unexpected file type returned")
 			}
 		}
 	}
@@ -320,7 +318,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode
 		for childPath, childNd := range children {
 			direntMap[childPath] = direntToBytes(Dirent{
 				Inode: childNd.NodeIndex,
-				Type: fileTypeToDirentType(childNd.Stat.Mode),
+				Type:  fileTypeToDirentType(childNd.Stat.Mode),
 			})
 		}
 		var err error
@@ -374,15 +372,15 @@ func main() {
 
 	// Choose a fan out to ensure block is under 4KB
 	direntTree, err := btree.Open(path.Join(usr.HomeDir, ".castore/dirent.bin"),
-0666, MAX_PATH, DIRENT_SIZE, 14, false)
+		0666, MAX_PATH, DIRENT_SIZE, 14, false)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-  nodeDB, err := bolt.Open(path.Join(usr.HomeDir, ".castore/contentmap.db"), 0666, nil)
-  if err != nil {
-    log.Fatal(err)
-  }
+	nodeDB, err := bolt.Open(path.Join(usr.HomeDir, ".castore/contentmap.db"), 0666, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	err = nodeDB.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(INODE_BUCKET_NAME))
@@ -393,12 +391,12 @@ func main() {
 	}
 
 	sc := StorageContext{
-		InodeMap: make(map[HostInode]*StorageNode),
+		InodeMap:    make(map[HostInode]*StorageNode),
 		HashFactory: hashFactory,
-		Cas: cas,
+		Cas:         cas,
 		InodeBlocks: inodeBlocks,
-		DirentTree: direntTree,
-		NodeDB: nodeDB,
+		DirentTree:  direntTree,
+		NodeDB:      nodeDB,
 	}
 
 	for _, dir := range os.Args[1:] {

@@ -24,7 +24,7 @@ type KeyType = string
 type ValueType = []byte
 
 type KeyValuePair struct {
-	Key KeyType
+	Key   KeyType
 	Value ValueType
 }
 
@@ -32,25 +32,25 @@ type KeyValuePair struct {
 // You can then start querying or writing records to the tree.
 type BTree struct {
 	// Maximum size in bytes of a key
-	MaxKeySize		int
+	MaxKeySize int
 
 	// Size in bytes of a value
-	EntrySize			int
+	EntrySize int
 
 	// The number of keys stored at each B-tree node. Each node has up to FanOut+1
 	// child nodes.
-	FanOut				int
+	FanOut int
 
 	// Number of bytes in total for an entry
-	nodeSize			int
+	nodeSize int
 
 	// Underlying block store to keep b-tree nodes
-	blocks				*blockfile.BlockFile
+	blocks *blockfile.BlockFile
 }
 
 func Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, readOnly bool) (*BTree, error) {
 	nodeSize := 4 + maxKeySize + entrySize
-	blockSize := 8 * (fanOut + 1) + nodeSize * fanOut
+	blockSize := 8*(fanOut+1) + nodeSize*fanOut
 	blocks, err := blockfile.Open(path, perm, blockSize, readOnly)
 	if err != nil {
 		return nil, err
@@ -59,10 +59,10 @@ func Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, read
 
 	return &BTree{
 		MaxKeySize: maxKeySize,
-		EntrySize: entrySize,
-		FanOut: fanOut,
-		nodeSize: nodeSize,
-		blocks: blocks,
+		EntrySize:  entrySize,
+		FanOut:     fanOut,
+		nodeSize:   nodeSize,
+		blocks:     blocks,
 	}, nil
 }
 
@@ -77,8 +77,8 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 	}
 
 	type KVPair struct {
-		Key		KeyType
-		Value	ValueType
+		Key   KeyType
+		Value ValueType
 	}
 
 	i := 0
@@ -91,7 +91,7 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 			return 0, errors.New("value wrong length")
 		}
 		sortedData[i] = KVPair{
-			Key: key,
+			Key:   key,
 			Value: value,
 		}
 		i++
@@ -101,7 +101,7 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 	})
 
 	var err error
-	blocks := make([]blockfile.BlockIndex, (size + tr.FanOut - 1) / tr.FanOut)
+	blocks := make([]blockfile.BlockIndex, (size+tr.FanOut-1)/tr.FanOut)
 	for i = 0; i < len(blocks); i++ {
 		blocks[i], err = tr.blocks.Allocate()
 		if err != nil {
@@ -120,13 +120,13 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 
 		// Write child block indexes
 		for j := 0; j <= tr.FanOut && nextChild < len(blocks); j++ {
-			casfs.Hbo.PutUint64(buf[j * 8:], blocks[nextChild])
+			casfs.Hbo.PutUint64(buf[j*8:], blocks[nextChild])
 			nextChild++
 		}
-		recordBuf := buf[8 * (tr.FanOut + 1):]
+		recordBuf := buf[8*(tr.FanOut+1):]
 
 		// Write node data
-		for j := i * tr.FanOut; j < (i + 1) * tr.FanOut && j < size; j++ {
+		for j := i * tr.FanOut; j < (i+1)*tr.FanOut && j < size; j++ {
 			si := idxer.sortIndex(j)
 			kvPair := sortedData[si]
 
@@ -158,22 +158,22 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key string) ([]byte, error
 		lo := 0
 		hi := tr.FanOut - 1
 		for {
-			md := lo + (hi - lo) / 2
-			nodeData := block[8 * (tr.FanOut + 1) + md * tr.nodeSize:]
+			md := lo + (hi-lo)/2
+			nodeData := block[8*(tr.FanOut+1)+md*tr.nodeSize:]
 
 			keylen := int(casfs.Hbo.Uint32(nodeData))
 			if keylen > tr.MaxKeySize {
 				return nil, errors.New("unexpected long key length")
 			}
 			if keylen == 0 {
-				hi = md -1
+				hi = md - 1
 				continue
 			}
 
 			cmp := strings.Compare(key, string(nodeData[4:4+keylen]))
 			if cmp == 0 {
 				// copy this?
-				return nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize], nil
+				return nodeData[4+tr.MaxKeySize : 4+tr.MaxKeySize+tr.EntrySize], nil
 			} else if cmp == -1 {
 				hi = md - 1
 			} else {
@@ -193,26 +193,26 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key string) ([]byte, error
 }
 
 type treeIndexer struct {
-	fanOut				int
-	size					int
-	depthSizes		[]int
-	maxDepth			int
-	lastDeepNode	int
+	fanOut       int
+	size         int
+	depthSizes   []int
+	maxDepth     int
+	lastDeepNode int
 }
 
 func createIndexer(fanOut int, size int) treeIndexer {
-	idx := treeIndexer {
-		fanOut: fanOut,
-		size: size,
+	idx := treeIndexer{
+		fanOut:     fanOut,
+		size:       size,
 		depthSizes: []int{0},
 	}
 
 	for idx.depthSizes[idx.maxDepth] < idx.size {
-		idx.depthSizes = append(idx.depthSizes, idx.depthSizes[idx.maxDepth] * (idx.fanOut + 1) + idx.fanOut)
+		idx.depthSizes = append(idx.depthSizes, idx.depthSizes[idx.maxDepth]*(idx.fanOut+1)+idx.fanOut)
 		idx.maxDepth++
 	}
 
-	idx.lastDeepNode = idx.size - idx.depthSizes[idx.maxDepth - 1] - 1
+	idx.lastDeepNode = idx.size - idx.depthSizes[idx.maxDepth-1] - 1
 	idx.lastDeepNode += idx.lastDeepNode / idx.fanOut
 	return idx
 }
@@ -224,15 +224,15 @@ func (idx treeIndexer) nodeIndex(sortIndex int) int {
 		level = idx.maxDepth
 	} else {
 		level = idx.maxDepth - 1
-		sortIndex = sortIndex - idx.lastDeepNode - 1 + idx.lastDeepNode / (idx.fanOut + 1)
+		sortIndex = sortIndex - idx.lastDeepNode - 1 + idx.lastDeepNode/(idx.fanOut+1)
 	}
 
-	for (sortIndex + 1) % (idx.fanOut + 1) == 0 {
+	for (sortIndex+1)%(idx.fanOut+1) == 0 {
 		level--
 		sortIndex /= idx.fanOut + 1
 	}
 
-	return idx.depthSizes[level - 1] + sortIndex - sortIndex / (idx.fanOut + 1)
+	return idx.depthSizes[level-1] + sortIndex - sortIndex/(idx.fanOut+1)
 }
 
 // Converts a node index into a sort index within the btree.
@@ -241,16 +241,16 @@ func (idx treeIndexer) sortIndex(nodeIndex int) int {
 	for idx.depthSizes[level] <= nodeIndex {
 		level++
 	}
-	levelPos := nodeIndex - idx.depthSizes[level - 1]
+	levelPos := nodeIndex - idx.depthSizes[level-1]
 	levelPos += levelPos / idx.fanOut
 
-	for i := level; i + 1 < idx.maxDepth; i++ {
-		levelPos = (levelPos + 1) * (idx.fanOut + 1) - 1
+	for i := level; i+1 < idx.maxDepth; i++ {
+		levelPos = (levelPos+1)*(idx.fanOut+1) - 1
 	}
 	if level != idx.maxDepth {
-		lastDepth := idx.size - idx.depthSizes[idx.maxDepth - 1]
+		lastDepth := idx.size - idx.depthSizes[idx.maxDepth-1]
 
-		newPos := (levelPos + 1) * (idx.fanOut + 1) - 1
+		newPos := (levelPos+1)*(idx.fanOut+1) - 1
 
 		levelPos += lastDepth
 		if newPos < levelPos {
@@ -260,7 +260,6 @@ func (idx treeIndexer) sortIndex(nodeIndex int) int {
 
 	return levelPos
 }
-
 
 func main() {
 	tr, err := Open("test.btree", 0666, 16, 16, 3, false)

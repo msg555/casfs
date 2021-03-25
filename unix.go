@@ -52,7 +52,6 @@ func UnixToFileStatMode(unixMode uint32) os.FileMode {
 	return fsMode
 }
 
-
 func FileStatToUnixMode(fsMode os.FileMode) uint32 {
 	unixMode := uint32(fsMode & 0777)
 	if (fsMode & os.ModeCharDevice) != 0 {

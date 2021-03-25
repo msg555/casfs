@@ -9,15 +9,15 @@ import (
 const INODE_SIZE = 52 + CONTENT_ADDRESS_LENGTH
 
 type InodeData struct {
-	Mode			uint32
-	Uid				uint32
-	Gid				uint32
-	Dev				uint64
-	Atim			uint64
-	Mtim			uint64
-	Ctim			uint64
-	TreeNode	blockfile.BlockIndex
-	Address		[CONTENT_ADDRESS_LENGTH]byte
+	Mode     uint32
+	Uid      uint32
+	Gid      uint32
+	Dev      uint64
+	Atim     uint64
+	Mtim     uint64
+	Ctim     uint64
+	TreeNode blockfile.BlockIndex
+	Address  [CONTENT_ADDRESS_LENGTH]byte
 }
 
 func (nd *InodeData) Write(buf []byte) {
@@ -39,8 +39,8 @@ func (nd *InodeData) Read(buf []byte) {
 func InodeFromStat(address []byte, st *unix.Stat_t) *InodeData {
 	data := InodeData{
 		Mode: st.Mode,
-		Uid: st.Uid,
-		Gid: st.Gid,
+		Uid:  st.Uid,
+		Gid:  st.Gid,
 		Atim: uint64(st.Atim.Nano()),
 		Mtim: uint64(st.Mtim.Nano()),
 		Ctim: uint64(st.Ctim.Nano()),
