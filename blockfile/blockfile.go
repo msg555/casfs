@@ -12,10 +12,10 @@ type BlockIndex = uint64
 
 
 type BlockFile struct {
-	BlockSize					uint32
-	File							*os.File
+	BlockSize					int
+	file							*os.File
 
-	internalBlockSize	uint32
+	internalBlockSize	int
 	blocks						BlockIndex
 	freeListHead			BlockIndex
 }
@@ -51,17 +51,41 @@ func writeAtFull(file *os.File, offset uint64, buf []byte) error {
 	return nil
 }
 
-func (bf *BlockFile) Init() error {
+func Open(path string, perm os.FileMode, blockSize int, readOnly bool) (*BlockFile, error) {
+	flags := os.O_CREATE | os.O_RDWR
+	if readOnly {
+		flags = os.O_RDONLY
+	}
+	f, err := os.OpenFile(path, flags, perm)
+	if err != nil {
+		return nil, err
+	}
+
+	bf := &BlockFile{
+		BlockSize: blockSize,
+		file: f,
+	}
+	bf.init()
+
+	return bf, nil
+}
+
+// Closes the underlying file handle
+func (bf *BlockFile) Close() error {
+	return bf.file.Close()
+}
+
+func (bf *BlockFile) init() error {
 	bf.internalBlockSize = bf.BlockSize + 8
 
-	pos, err := bf.File.Seek(0, 2)
+	pos, err := bf.file.Seek(0, 2)
 	if pos % int64(bf.internalBlockSize) != 0 {
 		return errors.New("unexpected file length")
 	}
 
 	bf.blocks = BlockIndex(pos) / BlockIndex(bf.internalBlockSize)
 	if 0 < bf.blocks {
-		data, err := readAtFull(bf.File, 0, 8, nil)
+		data, err := readAtFull(bf.file, 0, 8, nil)
 		if err != nil {
 			return err
 		}
@@ -76,7 +100,7 @@ func (bf *BlockFile) Init() error {
 
 func (bf *BlockFile) Allocate() (BlockIndex, error) {
 	if bf.freeListHead == 0 {
-		err := bf.File.Truncate(int64(bf.internalBlockSize) * int64(bf.blocks + 1))
+		err := bf.file.Truncate(int64(bf.internalBlockSize) * int64(bf.blocks + 1))
 		if err != nil {
 			return 0, err
 		}
@@ -87,12 +111,12 @@ func (bf *BlockFile) Allocate() (BlockIndex, error) {
 
 	index := bf.freeListHead
 
-	data, err := readAtFull(bf.File, uint64(bf.freeListHead) * uint64(bf.internalBlockSize), 8, nil)
+	data, err := readAtFull(bf.file, uint64(bf.freeListHead) * uint64(bf.internalBlockSize), 8, nil)
 	if err != nil {
 		return 0, err
 	}
 	bf.freeListHead = casfs.Hbo.Uint64(data)
-	err = writeAtFull(bf.File, 0, data)
+	err = writeAtFull(bf.file, 0, data)
 	if err != nil {
 		return 0, err
 	}
@@ -104,13 +128,13 @@ func (bf *BlockFile) Free(index BlockIndex) error {
 	var buf [8]byte
 
 	casfs.Hbo.PutUint64(buf[:], bf.freeListHead)
-	err := writeAtFull(bf.File, uint64(index) * uint64(bf.internalBlockSize), buf[:])
+	err := writeAtFull(bf.file, uint64(index) * uint64(bf.internalBlockSize), buf[:])
 	if err != nil {
 		return err
 	}
 
 	casfs.Hbo.PutUint64(buf[:], index)
-	err = writeAtFull(bf.File, 0, buf[:])
+	err = writeAtFull(bf.file, 0, buf[:])
 
 	bf.freeListHead = index
 
@@ -118,32 +142,22 @@ func (bf *BlockFile) Free(index BlockIndex) error {
 }
 
 func (bf *BlockFile) Read(index BlockIndex, buf []byte) ([]byte, error) {
-	return readAtFull(bf.File, uint64(index) * uint64(bf.internalBlockSize) + 8, int(bf.BlockSize), buf)
+	return readAtFull(bf.file, uint64(index) * uint64(bf.internalBlockSize) + 8, int(bf.BlockSize), buf)
 }
 
 func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
 	if len(buf) != int(bf.BlockSize) {
 		return errors.New("can only make writes of size BlockSize")
 	}
-	return writeAtFull(bf.File, uint64(index) * uint64(bf.internalBlockSize) + 8, buf)
+	return writeAtFull(bf.file, uint64(index) * uint64(bf.internalBlockSize) + 8, buf)
 }
 
 func main() {
-	f, err := os.OpenFile("block.file", os.O_CREATE | os.O_RDWR, 0666)
+	bf, err := Open("block.file", 0666, 128, false)
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
-
-	bf := &BlockFile{
-		BlockSize: 128,
-		File: f,
-	}
-
-	err = bf.Init()
-	if err != nil {
-		panic(err)
-	}
+	defer bf.Close()
 
 	id, err := bf.Allocate()
 	if err != nil {
