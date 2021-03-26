@@ -1,8 +1,6 @@
-package main
+package storage
 
 import (
-	"encoding/binary"
-
 	"golang.org/x/sys/unix"
 )
 
@@ -47,14 +45,14 @@ func fileTypeToDirentType(unixMode uint32) uint8 {
 
 func direntToBytes(ent Dirent) []byte {
 	var data [9]byte
-	binary.LittleEndian.PutUint64(data[:], ent.Inode)
+	bo.PutUint64(data[:], ent.Inode)
 	data[8] = ent.Type
 	return data[:]
 }
 
 func direntFromBytes(data []byte) Dirent {
 	return Dirent{
-		Inode: binary.LittleEndian.Uint64(data),
+		Inode: bo.Uint64(data),
 		Type:  data[8],
 	}
 }

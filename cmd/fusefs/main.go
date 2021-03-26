@@ -2,16 +2,16 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 
-	"bazil.org/fuse"
-  "github.com/spf13/pflag"
 	"github.com/msg555/casfs/fusefs"
+	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 )
 
-func testIt(cfs *fusefs.CasFS) {
+func testIt(conn *fusefs.FuseCasfsConnection) {
 	// err := unix.Access(cfs.MountDir, 0777)
 	/*
 		err := unix.Access(cfs.MountDir, 07)
@@ -30,64 +30,49 @@ func testIt(cfs *fusefs.CasFS) {
 		unix.Close(fd)
 	*/
 
-	fd, err := unix.Open(cfs.OverlayDir, unix.O_DIRECTORY, 0)
+	/*
+		fd, err := unix.Open(conn.OverlayDir, unix.O_DIRECTORY, 0)
 
-	var data [200]byte
-	n, err := unix.ReadDirent(fd, data[:])
-	fmt.Println(n, err, data)
+		var data [200]byte
+		n, err := unix.ReadDirent(fd, data[:])
+		fmt.Println(n, err, data)
 
-	unix.Close(fd)
+		unix.Close(fd)
+	*/
 }
 
 func main() {
-  pflag.Parse()
+	pflag.Parse()
+	if pflag.NArg() != 2 {
+		fmt.Println("Must specify mount point and root address")
+		os.Exit(1)
+	}
 
-  if pflag.NArg() != 2 {
-    fmt.Println("Must specify mount point and mirror directory")
-    os.Exit(1)
-  }
+	srv, err := fusefs.CreateDefaultServer()
+	if err != nil {
+		log.Fatal("failed to initialize", err)
+	}
 
-  unix.Umask(0)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)
 
-  cfs, err := fusefs.CreateCasFS(pflag.Arg(0), pflag.Arg(1))
-  if err != nil {
-    fmt.Println("Failed to initialize:", err)
-    os.Exit(1)
-  }
+	conn, err := srv.Mount(pflag.Arg(0), []byte(pflag.Arg(1)), true)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-  sigs := make(chan os.Signal, 1)
-  signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)
+	go conn.Serve()
+	go testIt(conn)
 
-  cfs.Conn, err = fuse.Mount(cfs.MountDir)
-  if err != nil {
-    fmt.Println(err)
-    os.Exit(1)
-  }
-
-  go cfs.Serve()
-  go testIt(cfs)
-
-  select {
-  case err := <-cfs.Fail:
-    fmt.Println(err)
-  case sig := <-sigs:
-    fmt.Println("signal received: ", sig)
-  }
-  err = fuse.Unmount(cfs.MountDir)
-  if err != nil {
-    fmt.Println("Could not unmount:", err)
-    os.Exit(1)
-  }
-
-  err = cfs.Conn.Close()
-
-  if err != nil {
-    fmt.Println(err)
-    os.Exit(1)
-  }
-
-  if err != nil {
-    fmt.Println(err)
-    os.Exit(1)
-  }
+	select {
+	case err := <-srv.Fail:
+		fmt.Println(err)
+	case sig := <-sigs:
+		fmt.Println("signal received: ", sig)
+	}
+	err = conn.Close()
+	if err != nil {
+		log.Fatal("Could not unmount:", err)
+	}
 }

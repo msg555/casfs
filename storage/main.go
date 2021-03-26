@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"crypto/sha256"
@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-
-	"os"
 	"os/user"
 	"path"
 	"sort"
@@ -43,7 +41,86 @@ type StorageNode struct {
 	NodeIndex blockfile.BlockIndex
 	Stat      *InodeData
 	Children  map[string]*StorageNode
-	NodeHash  []byte
+	NodeAddress  []byte
+}
+
+func OpenDefaultStorageContext() (*StorageContext, error) {
+	usr, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return OpenStorageContext(path.Join(usr.HomeDir, ".castore"))
+}
+
+func OpenStorageContext(basePath string) (*StorageContext, error) {
+	hashFactory := sha256.New
+	cas, err := castore.CreateCastore(basePath, hashFactory)
+	if err != nil {
+		return nil, err
+	}
+
+	inodeBlocks, err := blockfile.Open(path.Join(basePath, "inodes.bin"), 0666, INODE_SIZE, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Choose a fan out to ensure block is under 4KB
+	direntTree, err := btree.Open(path.Join(basePath, "dirent.bin"),
+		0666, MAX_PATH, DIRENT_SIZE, 14, false)
+	if err != nil {
+		inodeBlocks.Close()
+		log.Fatal(err)
+	}
+
+	nodeDB, err := bolt.Open(path.Join(basePath, "contentmap.db"), 0666, nil)
+	if err != nil {
+		direntTree.Close()
+		inodeBlocks.Close()
+		log.Fatal(err)
+	}
+
+	err = nodeDB.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(INODE_BUCKET_NAME))
+		return err
+	})
+	if err != nil {
+		nodeDB.Close()
+		direntTree.Close()
+		inodeBlocks.Close()
+		log.Fatal(err)
+	}
+
+	return &StorageContext{
+		InodeMap:    make(map[HostInode]*StorageNode),
+		HashFactory: hashFactory,
+		Cas:         cas,
+		InodeBlocks: inodeBlocks,
+		DirentTree:  direntTree,
+		NodeDB:      nodeDB,
+	}, nil
+}
+
+func (sc *StorageContext) Close() error {
+	if sc.InodeBlocks != nil {
+		err := sc.InodeBlocks.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if sc.DirentTree != nil {
+		err := sc.DirentTree.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if sc.NodeDB != nil {
+		err := sc.NodeDB.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (sc *StorageContext) LookupAddressInode(address []byte) (blockfile.BlockIndex, error) {
@@ -64,7 +141,7 @@ func (sc *StorageContext) LookupAddressInode(address []byte) (blockfile.BlockInd
 
 // Allocate a new inode and return a StorageNode to represent it.
 func (sc *StorageContext) CreateStorageNode(address []byte, st *unix.Stat_t, createCallback func(*InodeData) error) (*StorageNode, error) {
-	stat := InodeFromStat(address, st)
+	stat := InodeFromStat(address, nil, st)
 
 	var nodeIndex blockfile.BlockIndex
 	err := sc.NodeDB.Update(func(tx *bolt.Tx) error {
@@ -106,14 +183,14 @@ func (sc *StorageContext) CreateStorageNode(address []byte, st *unix.Stat_t, cre
 	}, nil
 }
 
-func (nd *StorageNode) ComputeNodeHash(sc *StorageContext) {
+func (nd *StorageNode) ComputeNodeAddress(sc *StorageContext) {
 	h := sc.HashFactory()
 
 	var buf [INODE_SIZE]byte
 	nd.Stat.Write(buf[:])
 	h.Write(buf[:])
 
-	nd.NodeHash = h.Sum(nil)
+	nd.NodeAddress = h.Sum(nil)
 }
 
 func Fstatat(dirfd int, pathname string, stat *unix.Stat_t, flags int) error {
@@ -159,9 +236,9 @@ func (sc *StorageContext) ImportSpecial(st *unix.Stat_t) (*StorageNode, error) {
 	}
 
 	nd = &StorageNode{
-		Stat: InodeFromStat(h.Sum(nil), st),
+		Stat: InodeFromStat(h.Sum(nil), nil, st),
 	}
-	nd.ComputeNodeHash(sc)
+	nd.ComputeNodeAddress(sc)
 
 	sc.InodeMap[hostInode] = nd
 	return nd, nil
@@ -202,7 +279,7 @@ func (sc *StorageContext) ImportFile(fd int, st *unix.Stat_t) (*StorageNode, err
 	if err != nil {
 		return nil, err
 	}
-	nd.ComputeNodeHash(sc)
+	nd.ComputeNodeAddress(sc)
 
 	sc.InodeMap[hostInode] = nd
 	return nd, nil
@@ -329,7 +406,7 @@ func (sc *StorageContext) ImportDirectory(fd int, st *unix.Stat_t) (*StorageNode
 		return nil, err
 	}
 
-	nd.ComputeNodeHash(sc)
+	nd.ComputeNodeAddress(sc)
 	return nd, nil
 }
 
@@ -351,60 +428,4 @@ func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 	defer unix.Close(fd)
 
 	return sc.ImportDirectory(fd, &st)
-}
-
-func main() {
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	hashFactory := sha256.New
-	cas, err := castore.CreateCastore(path.Join(usr.HomeDir, ".castore"), hashFactory)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	inodeBlocks, err := blockfile.Open(path.Join(usr.HomeDir, ".castore/inodes.bin"), 0666, INODE_SIZE, false)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Choose a fan out to ensure block is under 4KB
-	direntTree, err := btree.Open(path.Join(usr.HomeDir, ".castore/dirent.bin"),
-		0666, MAX_PATH, DIRENT_SIZE, 14, false)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	nodeDB, err := bolt.Open(path.Join(usr.HomeDir, ".castore/contentmap.db"), 0666, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = nodeDB.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(INODE_BUCKET_NAME))
-		return err
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	sc := StorageContext{
-		InodeMap:    make(map[HostInode]*StorageNode),
-		HashFactory: hashFactory,
-		Cas:         cas,
-		InodeBlocks: inodeBlocks,
-		DirentTree:  direntTree,
-		NodeDB:      nodeDB,
-	}
-
-	for _, dir := range os.Args[1:] {
-		_, err := sc.ImportPath(dir)
-		if err != nil {
-			fmt.Println("Import of", dir, "failed with", err)
-		} else {
-			fmt.Println("Imported", dir, "successfully")
-		}
-	}
 }

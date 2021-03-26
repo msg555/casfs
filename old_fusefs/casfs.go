@@ -19,6 +19,7 @@ import (
 
 	"bazil.org/fuse"
 	"github.com/msg555/casfs"
+	"github.com/msg555/storage"
 	"golang.org/x/sys/unix"
 )
 
