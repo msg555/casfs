@@ -50,8 +50,8 @@ func direntToBytes(ent Dirent) []byte {
 	return data[:]
 }
 
-func direntFromBytes(data []byte) Dirent {
-	return Dirent{
+func direntFromBytes(data []byte) *Dirent {
+	return &Dirent{
 		Inode: bo.Uint64(data),
 		Type:  data[8],
 	}

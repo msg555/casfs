@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -56,10 +57,14 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)
 
-	conn, err := srv.Mount(pflag.Arg(0), []byte(pflag.Arg(1)), true)
+	rootAddress, err := hex.DecodeString(pflag.Arg(1))
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal("failed to decode content address", err)
+	}
+
+	conn, err := srv.Mount(pflag.Arg(0), rootAddress, true)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	go conn.Serve()

@@ -66,21 +66,21 @@ func (cas *Castore) Open(addr ContentAddress) (*os.File, error) {
 	return os.Open(path.Join(objDir, objName))
 }
 
-func (cas *Castore) Insert(data io.Reader) (ContentAddress, error) {
+func (cas *Castore) Insert(data io.Reader) (ContentAddress, int64, error) {
 	f, err := os.CreateTemp(cas.WorkDir, "data-")
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	hasher := cas.HashFactory()
-	_, err = io.Copy(io.MultiWriter(hasher, f), data)
+	written, err := io.Copy(io.MultiWriter(hasher, f), data)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	err = f.Close()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	h := hasher.Sum(nil)
@@ -88,13 +88,13 @@ func (cas *Castore) Insert(data io.Reader) (ContentAddress, error) {
 	objDir, objName := cas.objectPath(h)
 	err = os.MkdirAll(objDir, 0777)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	err = os.Rename(f.Name(), path.Join(objDir, objName))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return h, nil
+	return h, written, nil
 }

@@ -3,14 +3,15 @@ package storage
 import (
 	"encoding/binary"
 
-	"github.com/msg555/casfs"
 	"github.com/msg555/casfs/blockfile"
-	"golang.org/x/sys/unix"
+	"github.com/msg555/casfs/unix"
 )
 
-const INODE_SIZE = 52 + 2 * CONTENT_ADDRESS_LENGTH
+const INODE_SIZE = 60 + 2 * CONTENT_ADDRESS_LENGTH
 
 var bo = binary.LittleEndian
+
+type InodeIndex = blockfile.BlockIndex
 
 type InodeData struct {
 	Mode     uint32
@@ -20,6 +21,7 @@ type InodeData struct {
 	Atim     uint64
 	Mtim     uint64
 	Ctim     uint64
+	Size     uint64
 	TreeNode blockfile.BlockIndex
 	Address  [CONTENT_ADDRESS_LENGTH]byte
 	XattrAddress [CONTENT_ADDRESS_LENGTH]byte
@@ -33,9 +35,10 @@ func (nd *InodeData) Write(buf []byte) {
 	bo.PutUint64(buf[20:], nd.Atim)
 	bo.PutUint64(buf[28:], nd.Mtim)
 	bo.PutUint64(buf[36:], nd.Ctim)
-	bo.PutUint64(buf[44:], nd.TreeNode)
-	copy(buf[52:], nd.Address[:])
-	copy(buf[52+CONTENT_ADDRESS_LENGTH:], nd.XattrAddress[:])
+	bo.PutUint64(buf[44:], nd.Size)
+	bo.PutUint64(buf[52:], nd.TreeNode)
+	copy(buf[60:], nd.Address[:])
+	copy(buf[60+CONTENT_ADDRESS_LENGTH:], nd.XattrAddress[:])
 }
 
 func (nd *InodeData) Read(buf []byte) {
@@ -46,9 +49,10 @@ func (nd *InodeData) Read(buf []byte) {
 	nd.Atim = bo.Uint64(buf[20:])
 	nd.Mtim = bo.Uint64(buf[28:])
 	nd.Ctim = bo.Uint64(buf[36:])
-	nd.TreeNode = bo.Uint64(buf[44:])
-	copy(nd.Address[:], buf[52:])
-	copy(nd.XattrAddress[:], buf[52+CONTENT_ADDRESS_LENGTH:])
+	nd.Size = bo.Uint64(buf[44:])
+	nd.TreeNode = bo.Uint64(buf[52:])
+	copy(nd.Address[:], buf[60:])
+	copy(nd.XattrAddress[:], buf[60+CONTENT_ADDRESS_LENGTH:])
 }
 
 func InodeFromStat(address []byte, xattrAddress []byte, st *unix.Stat_t) *InodeData {
@@ -59,8 +63,9 @@ func InodeFromStat(address []byte, xattrAddress []byte, st *unix.Stat_t) *InodeD
 		Atim: uint64(st.Atim.Nano()),
 		Mtim: uint64(st.Mtim.Nano()),
 		Ctim: uint64(st.Ctim.Nano()),
+		Size: uint64(st.Size),
 	}
-	if casfs.S_ISCHR(data.Mode) || casfs.S_ISBLK(data.Mode) {
+	if unix.S_ISCHR(data.Mode) || unix.S_ISBLK(data.Mode) {
 		data.Dev = st.Rdev
 	}
 	copy(data.Address[:], address)

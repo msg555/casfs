@@ -8,15 +8,18 @@
 package btree
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/msg555/casfs"
 	"github.com/msg555/casfs/blockfile"
 )
+
+var bo = binary.LittleEndian
 
 const ALIGNMENT = 128
 
@@ -120,7 +123,7 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 
 		// Write child block indexes
 		for j := 0; j <= tr.FanOut && nextChild < len(blocks); j++ {
-			casfs.Hbo.PutUint64(buf[j*8:], blocks[nextChild])
+			bo.PutUint64(buf[j*8:], blocks[nextChild])
 			nextChild++
 		}
 		recordBuf := buf[8*(tr.FanOut+1):]
@@ -130,7 +133,7 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 			si := idxer.sortIndex(j)
 			kvPair := sortedData[si]
 
-			casfs.Hbo.PutUint32(recordBuf, uint32(len(kvPair.Key)))
+			bo.PutUint32(recordBuf, uint32(len(kvPair.Key)))
 			copy(recordBuf[4:], kvPair.Key)
 			copy(recordBuf[4+tr.MaxKeySize:], kvPair.Value)
 			recordBuf = recordBuf[tr.nodeSize:]
@@ -145,7 +148,105 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 	return blocks[0], nil
 }
 
-func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key string) ([]byte, error) {
+// Start scanning entries at the given offset (pass 0 to start at the beginning).
+// Scan() will invoke entryCallback
+// for each entry. If entryCallback returns false the scan will terminate.
+// A scan can be resumed starting at a given entry by passing back the offset
+// parameter sent to the callback function.
+// If the scan finishes processing all records it will return 0. Otherwise
+// it will return an opaque offset that can be passed back to Scan() to resume
+// the scan starting with the record that entryCallback returned false on.
+// Scan() will return true if the scan has reached the end of the btree.
+func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallback func(offset uint64, key KeyType, value ValueType) bool) (bool, error) {
+	if nodeIndex == 0 {
+		return true, nil
+	}
+
+	var stackBlocks [][]byte
+	var stackIndexes []int
+	for {
+		block := make([]byte, tr.blocks.BlockSize)
+		_, err := tr.blocks.Read(nodeIndex, block)
+		if err != nil {
+			return false, err
+		}
+
+		childIndex := offset % uint64(tr.FanOut + 1)
+		stackBlocks = append(stackBlocks, block)
+		stackIndexes = append(stackIndexes, int(childIndex))
+		if offset <= uint64(tr.FanOut) {
+			break
+		}
+
+		offset /= uint64(tr.FanOut + 1)
+		nodeIndex = blockfile.BlockIndex(bo.Uint32(block[8*childIndex:]))
+	}
+
+	moveUp := true
+	stackDepth := len(stackIndexes) - 1
+	if stackIndexes[stackDepth] > 0 {
+		stackIndexes[stackDepth]--
+		moveUp = false
+	}
+	for {
+		if moveUp {
+			for {
+				childIndex := bo.Uint64(stackBlocks[stackDepth][8*stackIndexes[stackDepth]:])
+				if childIndex == 0 {
+					break
+				}
+
+				block := make([]byte, tr.blocks.BlockSize)
+				_, err := tr.blocks.Read(childIndex, block)
+				if err != nil {
+					return false, err
+				}
+
+				stackBlocks = append(stackBlocks, block)
+				stackIndexes = append(stackIndexes, 0)
+				stackDepth++
+			}
+		}
+		moveUp = true
+
+		for {
+			if stackDepth == -1 {
+				return true, nil
+			}
+			block := stackBlocks[stackDepth]
+			index := stackIndexes[stackDepth]
+			if index == tr.FanOut || bo.Uint64(block[8*(tr.FanOut+1)+index*tr.nodeSize:]) == 0 {
+				stackDepth--
+			} else {
+				break
+			}
+		}
+
+		stackBlocks = stackBlocks[:stackDepth + 1]
+		stackIndexes = stackIndexes[:stackDepth + 1]
+
+		block := stackBlocks[stackDepth]
+		index := stackIndexes[stackDepth]
+		nodeData := block[8*(tr.FanOut+1)+index*tr.nodeSize:]
+
+		keylen := int(bo.Uint32(nodeData))
+		if keylen > tr.MaxKeySize {
+			return false, errors.New("unexpected long key length")
+		}
+
+		offset = uint64(index + 1)
+		for i := stackDepth - 1; i >= 0; i-- {
+			offset = offset * uint64(tr.FanOut + 1) + uint64(stackIndexes[i])
+		}
+		if !entryCallback(offset, string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
+			return false, nil
+		}
+
+		stackIndexes[stackDepth]++
+	}
+}
+
+func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, error) {
 	// Index 0 means block doesn't exist
 	block := make([]byte, tr.blocks.BlockSize)
 
@@ -161,7 +262,7 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key string) ([]byte, error
 			md := lo + (hi-lo)/2
 			nodeData := block[8*(tr.FanOut+1)+md*tr.nodeSize:]
 
-			keylen := int(casfs.Hbo.Uint32(nodeData))
+			keylen := int(bo.Uint32(nodeData))
 			if keylen > tr.MaxKeySize {
 				return nil, errors.New("unexpected long key length")
 			}
@@ -183,7 +284,7 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key string) ([]byte, error
 				if cmp == 1 {
 					md++
 				}
-				nodeIndex = casfs.Hbo.Uint64(block[8*md:])
+				nodeIndex = bo.Uint64(block[8*md:])
 				break
 			}
 		}
@@ -264,7 +365,7 @@ func (idx treeIndexer) sortIndex(nodeIndex int) int {
 func main() {
 	tr, err := Open("test.btree", 0666, 16, 16, 3, false)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	size := 16
@@ -276,7 +377,7 @@ func main() {
 
 	rootIndex, err := tr.WriteRecords(data)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	fmt.Println("Wrote at index", rootIndex)
@@ -284,16 +385,33 @@ func main() {
 	for i := 0; i < size; i++ {
 		data, err := tr.Find(rootIndex, fmt.Sprintf("wow-%d", i))
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 
 		if data == nil {
-			fmt.Println("No data found")
-			panic("fail")
+			log.Fatal("no data found")
 		} else {
 			fmt.Println("Got data:", data)
 		}
 	}
 
-	fmt.Println("hello")
+	offset := uint64(0)
+	for {
+		cnt := 0
+		complete, err := tr.Scan(rootIndex, offset, func(off uint64, key string, val []byte) bool {
+			cnt++
+			if cnt > 1 {
+				offset = off
+				return false
+			}
+			fmt.Println("Found", key)
+			return true
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if complete {
+			break
+		}
+	}
 }
