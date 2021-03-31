@@ -22,10 +22,10 @@ func (conn *FuseCasfsConnection) handleReleaseRequest(req *fuse.ReleaseRequest) 
 	conn.handleLock.Unlock()
 
 	if !ok {
-    return FuseError{
-      source: errors.New("invalid file handle"),
-      errno:  unix.EBADF,
-    }
+		return FuseError{
+			source: errors.New("invalid file handle"),
+			errno:  unix.EBADF,
+		}
 	}
 	return handle.Release(req)
 }
@@ -36,10 +36,10 @@ func (conn *FuseCasfsConnection) handleReadRequest(req *fuse.ReadRequest) error 
 	conn.handleLock.RUnlock()
 
 	if !ok {
-    return FuseError{
-      source: errors.New("invalid file handle"),
-      errno:  unix.EBADF,
-    }
+		return FuseError{
+			source: errors.New("invalid file handle"),
+			errno:  unix.EBADF,
+		}
 	}
 	return handle.Read(req)
 }
@@ -65,9 +65,9 @@ type FileHandleDir struct {
 }
 
 func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
-  if !req.Dir {
+	if !req.Dir {
 		return unix.EISDIR
-  }
+	}
 	if uint64(req.Offset) == DIRENT_OFFSET_EOF {
 		req.Respond(&fuse.ReadResponse{})
 		return nil
@@ -98,9 +98,9 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 		updateDirEntryOffset(buf[lastOffset:], DIRENT_OFFSET_EOF)
 	}
 
-  req.Respond(&fuse.ReadResponse{
-    Data: buf[:bufOffset],
-  })
+	req.Respond(&fuse.ReadResponse{
+		Data: buf[:bufOffset],
+	})
 	return nil
 }
 
@@ -115,9 +115,9 @@ type FileHandleReg struct {
 }
 
 func (h *FileHandleReg) Read(req *fuse.ReadRequest) error {
-  if req.Dir {
+	if req.Dir {
 		return unix.ENOTDIR
-  }
+	}
 
 	buf := make([]byte, req.Size)
 	read, err := h.File.ReadAt(buf, req.Offset)

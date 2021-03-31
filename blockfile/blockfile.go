@@ -1,12 +1,13 @@
 package blockfile
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
-
-	"github.com/msg555/casfs"
 )
+
+var bo = binary.LittleEndian
 
 type BlockIndex = uint64
 
@@ -88,7 +89,7 @@ func (bf *BlockFile) init() error {
 		if err != nil {
 			return err
 		}
-		bf.freeListHead = casfs.Hbo.Uint64(data)
+		bf.freeListHead = bo.Uint64(data)
 	} else {
 		bf.Allocate()
 	}
@@ -114,7 +115,7 @@ func (bf *BlockFile) Allocate() (BlockIndex, error) {
 	if err != nil {
 		return 0, err
 	}
-	bf.freeListHead = casfs.Hbo.Uint64(data)
+	bf.freeListHead = bo.Uint64(data)
 	err = writeAtFull(bf.file, 0, data)
 	if err != nil {
 		return 0, err
@@ -126,13 +127,13 @@ func (bf *BlockFile) Allocate() (BlockIndex, error) {
 func (bf *BlockFile) Free(index BlockIndex) error {
 	var buf [8]byte
 
-	casfs.Hbo.PutUint64(buf[:], bf.freeListHead)
+	bo.PutUint64(buf[:], bf.freeListHead)
 	err := writeAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize), buf[:])
 	if err != nil {
 		return err
 	}
 
-	casfs.Hbo.PutUint64(buf[:], index)
+	bo.PutUint64(buf[:], index)
 	err = writeAtFull(bf.file, 0, buf[:])
 
 	bf.freeListHead = index
@@ -142,6 +143,15 @@ func (bf *BlockFile) Free(index BlockIndex) error {
 
 func (bf *BlockFile) Read(index BlockIndex, buf []byte) ([]byte, error) {
 	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+8, int(bf.BlockSize), buf)
+}
+
+func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, error) {
+	if sz < 0 || sz > bf.BlockSize {
+		return nil, errors.New("invalid block size")
+	} else if off < 0 || off >= bf.BlockSize-sz {
+		return nil, errors.New("read outside of block")
+	}
+	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+uint64(8+off), sz, buf)
 }
 
 func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {

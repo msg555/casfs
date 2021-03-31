@@ -19,7 +19,7 @@ for further notes about how fill_dir is meant to be used.
 https://libfuse.github.io/doxygen/fuse__lowlevel_8h.html#ad1957bcc8ece8c90f16c42c4daf3053f
 */
 func direntAlign(x int) int {
-  return (x + 7) &^ 7
+	return (x + 7) &^ 7
 }
 
 func updateDirEntryOffset(buf []byte, offset uint64) {
@@ -27,33 +27,32 @@ func updateDirEntryOffset(buf []byte, offset uint64) {
 }
 
 func addDirEntry(buf []byte, name string, ent *storage.Dirent) int {
-  /*
-      define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
+	/*
+	   define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 
-      struct fuse_dirent {
-        u64   ino;
-        u64   off;
-        u32   namelen;
-        u32   type;
-        char name[];
-      };
-  */
+	   struct fuse_dirent {
+	     u64   ino;
+	     u64   off;
+	     u32   namelen;
+	     u32   type;
+	     char name[];
+	   };
+	*/
 
-  entryBaseLen := 24 + len(name)
-  entryPadLen := direntAlign(entryBaseLen)
-  if len(buf) < entryPadLen {
-    return 0
-  }
+	entryBaseLen := 24 + len(name)
+	entryPadLen := direntAlign(entryBaseLen)
+	if len(buf) < entryPadLen {
+		return 0
+	}
 
 	casfs.Hbo.PutUint64(buf[0:], ent.Inode)
 	casfs.Hbo.PutUint32(buf[16:], uint32(len(name)))
 	casfs.Hbo.PutUint32(buf[20:], uint32(ent.Type))
 
-  copy(buf[24:], name)
-  for i := entryBaseLen; i < entryPadLen; i++ {
-    buf[i] = 0
-  }
+	copy(buf[24:], name)
+	for i := entryBaseLen; i < entryPadLen; i++ {
+		buf[i] = 0
+	}
 
-  return entryPadLen
+	return entryPadLen
 }
-

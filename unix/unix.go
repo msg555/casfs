@@ -8,34 +8,34 @@ import (
 )
 
 const (
-	PATH_MAX = 4096
+	PATH_MAX       = 4096
 	PATH_MAX_LIMIT = 1 << 16
 
 	O_RDONLY = unix.O_RDONLY
-	O_RDWR = unix.O_RDWR
+	O_RDWR   = unix.O_RDWR
 	O_WRONLY = unix.O_WRONLY
 
-	S_IFMT = unix.S_IFMT
-	S_IFBLK = unix.S_IFBLK
-	S_IFCHR = unix.S_IFCHR
-	S_IFDIR = unix.S_IFDIR
-	S_IFIFO = unix.S_IFIFO
-	S_IFLNK = unix.S_IFLNK
-	S_IFREG = unix.S_IFREG
+	S_IFMT   = unix.S_IFMT
+	S_IFBLK  = unix.S_IFBLK
+	S_IFCHR  = unix.S_IFCHR
+	S_IFDIR  = unix.S_IFDIR
+	S_IFIFO  = unix.S_IFIFO
+	S_IFLNK  = unix.S_IFLNK
+	S_IFREG  = unix.S_IFREG
 	S_IFSOCK = unix.S_IFSOCK
 
 	S_ISGID = unix.S_ISGID
 	S_ISUID = unix.S_ISUID
 	S_ISVTX = unix.S_ISVTX
 
-	EACCES = unix.EACCES
-	EBADF = unix.EBADF
-	EIO = unix.EIO
-	EISDIR = unix.EISDIR
+	EACCES  = unix.EACCES
+	EBADF   = unix.EBADF
+	EIO     = unix.EIO
+	EISDIR  = unix.EISDIR
 	ENODATA = unix.ENODATA
 	ENOTDIR = unix.ENOTDIR
 	ENOTSUP = unix.ENOTSUP
-	EROFS = unix.EROFS
+	EROFS   = unix.EROFS
 )
 
 type Stat_t = unix.Stat_t
@@ -129,7 +129,7 @@ func TestAccess(user, group bool, mode, mask uint32) bool {
 }
 
 // Invoke a syscall that returns just an error, retrying on EINTR
-func RetrySyscallE(callSyscallE func()error) error {
+func RetrySyscallE(callSyscallE func() error) error {
 	for {
 		err := callSyscallE()
 		if err != nil && err == unix.EINTR {
@@ -140,7 +140,7 @@ func RetrySyscallE(callSyscallE func()error) error {
 }
 
 // Invoke a syscall that returns an int and an error, retrying on EINTR
-func RetrySyscallIE(callSyscallIE func()(int, error)) (int, error) {
+func RetrySyscallIE(callSyscallIE func() (int, error)) (int, error) {
 	for {
 		n, err := callSyscallIE()
 		if err != nil && err == unix.EINTR {
@@ -162,76 +162,76 @@ func RetrySyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (uintptr, uintptr, Errn
 }
 
 func Openat(dirfd int, path string, flags int, mode uint32) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Openat(dirfd, path, flags, mode)
 	})
 }
 
 func Getdents(fd int, buf []byte) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Getdents(fd, buf)
 	})
 }
 
 func Read(fd int, p []byte) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Read(fd, p)
 	})
 }
 
 func Pread(fd int, p []byte, offset int64) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Pread(fd, p, offset)
 	})
 }
 
 func Readlinkat(dirfd int, path string, buf []byte) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Readlinkat(dirfd, path, buf)
 	})
 }
 
 func Open(path string, mode int, perm uint32) (int, error) {
-	return RetrySyscallIE(func()(int, error) {
+	return RetrySyscallIE(func() (int, error) {
 		return unix.Open(path, mode, perm)
 	})
 }
 
 func Close(fd int) error {
-	return RetrySyscallE(func()error {
+	return RetrySyscallE(func() error {
 		return unix.Close(fd)
 	})
 }
 
 func Stat(path string, stat *Stat_t) error {
-	return RetrySyscallE(func()error {
+	return RetrySyscallE(func() error {
 		return unix.Stat(path, stat)
 	})
 }
 
 func Fstat(fd int, stat *Stat_t) error {
-	return RetrySyscallE(func()error {
+	return RetrySyscallE(func() error {
 		return unix.Fstat(fd, stat)
 	})
 }
 
 func Fstatat(dirfd int, pathname string, stat *unix.Stat_t, flags int) error {
-  var p *byte
-  p, err := unix.BytePtrFromString(pathname)
-  if err != nil {
-    return err
-  }
+	var p *byte
+	p, err := unix.BytePtrFromString(pathname)
+	if err != nil {
+		return err
+	}
 
-  _, _, errno := RetrySyscall6(unix.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
-  if errno != 0 {
-    return errno
-  }
+	_, _, errno := RetrySyscall6(unix.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
+	if errno != 0 {
+		return errno
+	}
 
-  return nil
+	return nil
 }
 
 func Statfs(path string, buf *Statfs_t) error {
-	return RetrySyscallE(func()error {
+	return RetrySyscallE(func() error {
 		return unix.Statfs(path, buf)
 	})
 }

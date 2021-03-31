@@ -51,6 +51,6 @@ func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, read
 		MountPoint: mountPoint,
 		ReadOnly:   readOnly,
 		rootIndex:  rootIndex,
-		handleMap: make(map[fuse.HandleID]Handle),
+		handleMap:  make(map[fuse.HandleID]Handle),
 	}, nil
 }

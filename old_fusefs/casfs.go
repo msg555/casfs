@@ -286,7 +286,7 @@ func (nd *NodeData) handleCreateRequest(req *fuse.CreateRequest) {
 	}
 
 	fullPath := path.Join(cfs.OverlayDir, lookupPath)
-	fd, err := unix.Open(fullPath, int(req.Flags), uint32(req.Mode &^ req.Umask))
+	fd, err := unix.Open(fullPath, int(req.Flags), uint32(req.Mode&^req.Umask))
 	if err != nil {
 		req.RespondError(WrapIOError(err))
 		return
@@ -407,7 +407,7 @@ func (nd *NodeData) handleIoctlRequest(req *fuse.IoctlRequest) {
 	fmt.Println("INDATA:", len(req.InData), req.InData)
 	req.Respond(&fuse.IoctlResponse{
 		Result: 555,
-		Data: []byte{10, 0, 0, 0, 8, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0},
+		Data:   []byte{10, 0, 0, 0, 8, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0},
 	})
 }
 
@@ -457,7 +457,7 @@ func (cfs *CasFS) handleRequest(req fuse.Request) {
 	case *fuse.RemoveRequest:
 		nd.handleRemoveRequest(req.(*fuse.RemoveRequest))
 
-// fsync, forget
+		// fsync, forget
 
 	// Handle methods
 	case *fuse.ReleaseRequest:

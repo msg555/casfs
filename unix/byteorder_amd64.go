@@ -1,4 +1,4 @@
-package casfs
+package unix
 
 import (
 	"encoding/binary"

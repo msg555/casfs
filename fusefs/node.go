@@ -13,23 +13,23 @@ import (
 )
 
 func nsTimestampToTime(nsTimestamp uint64) time.Time {
-	return time.Unix(int64(nsTimestamp / 1000000000), int64(nsTimestamp % 1000000000))
+	return time.Unix(int64(nsTimestamp/1000000000), int64(nsTimestamp%1000000000))
 }
 
 func (conn *FuseCasfsConnection) nodeToAttr(nodeIndex storage.InodeIndex, inode *storage.InodeData) fuse.Attr {
 	return fuse.Attr{
-		Valid: DURATION_DEFAULT,
-		Inode: uint64(conn.nodeIndexToNodeID(nodeIndex)),
-		Size: inode.Size,
-		Blocks: (inode.Size + 511) >> 9,
-		Atime: nsTimestampToTime(inode.Atim),
-		Mtime: nsTimestampToTime(inode.Mtim),
-		Ctime: nsTimestampToTime(inode.Ctim),
-		Mode: unix.UnixToFileStatMode(inode.Mode),
-		Nlink: 1,
-		Uid: inode.Uid,
-		Gid: inode.Gid,
-		Rdev: uint32(inode.Dev),
+		Valid:     DURATION_DEFAULT,
+		Inode:     uint64(conn.nodeIndexToNodeID(nodeIndex)),
+		Size:      inode.Size,
+		Blocks:    (inode.Size + 511) >> 9,
+		Atime:     nsTimestampToTime(inode.Atim),
+		Mtime:     nsTimestampToTime(inode.Mtim),
+		Ctime:     nsTimestampToTime(inode.Ctim),
+		Mode:      unix.UnixToFileStatMode(inode.Mode),
+		Nlink:     1,
+		Uid:       inode.Uid,
+		Gid:       inode.Gid,
+		Rdev:      uint32(inode.Dev),
 		BlockSize: 1024,
 	}
 }
@@ -42,9 +42,9 @@ func (conn *FuseCasfsConnection) handleAccessRequest(req *fuse.AccessRequest) er
 
 	if !unix.TestAccess(req.Uid == inode.Uid, req.Gid == inode.Gid, inode.Mode, req.Mask) {
 		return FuseError{
-      source: errors.New("permission denied"),
-      errno:  unix.EACCES,
-    }
+			source: errors.New("permission denied"),
+			errno:  unix.EACCES,
+		}
 	}
 
 	req.Respond()
@@ -63,9 +63,9 @@ func (conn *FuseCasfsConnection) handleLookupRequest(req *fuse.LookupRequest) er
 	}
 	if data == nil {
 		return FuseError{
-      source: errors.New("permission denied"),
-      errno:  unix.EACCES,
-    }
+			source: errors.New("permission denied"),
+			errno:  unix.EACCES,
+		}
 	}
 
 	childInode, err := conn.Server.Storage.ReadInode(data.Inode)
@@ -74,10 +74,10 @@ func (conn *FuseCasfsConnection) handleLookupRequest(req *fuse.LookupRequest) er
 	}
 
 	req.Respond(&fuse.LookupResponse{
-		Node: conn.nodeIndexToNodeID(data.Inode),
+		Node:       conn.nodeIndexToNodeID(data.Inode),
 		Generation: 1,
 		EntryValid: DURATION_DEFAULT,
-		Attr: conn.nodeToAttr(data.Inode, childInode),
+		Attr:       conn.nodeToAttr(data.Inode, childInode),
 	})
 
 	return nil
@@ -103,22 +103,22 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 	}
 
 	if req.Dir && !unix.S_ISDIR(inode.Mode) {
-    return FuseError{
-      source: errors.New("not a directory"),
-      errno:  unix.ENOTDIR,
-    }
+		return FuseError{
+			source: errors.New("not a directory"),
+			errno:  unix.ENOTDIR,
+		}
 	}
-  if req.Flags.IsWriteOnly() || req.Flags.IsReadWrite() {
-    return FuseError{
-      source: errors.New("read only file system"),
-      errno:  unix.EROFS,
-    }
+	if req.Flags.IsWriteOnly() || req.Flags.IsReadWrite() {
+		return FuseError{
+			source: errors.New("read only file system"),
+			errno:  unix.EROFS,
+		}
 	}
 	if (req.Flags & (fuse.OpenAppend | fuse.OpenCreate | fuse.OpenTruncate)) != 0 {
-    return FuseError{
-      source: errors.New("read only file system"),
-      errno:  unix.EROFS,
-    }
+		return FuseError{
+			source: errors.New("read only file system"),
+			errno:  unix.EROFS,
+		}
 	}
 
 	// TODO: Ensure we havethe right permissions
@@ -126,7 +126,7 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 	switch inode.Mode & unix.S_IFMT {
 	case unix.S_IFDIR:
 		handleID = conn.OpenHandle(&FileHandleDir{
-			Conn: conn,
+			Conn:      conn,
 			InodeData: inode,
 		})
 	case unix.S_IFREG:
@@ -137,7 +137,7 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 
 		handleID = conn.OpenHandle(&FileHandleReg{
 			InodeData: inode,
-			File: file,
+			File:      file,
 		})
 	default:
 		return errors.New("not implemented")
@@ -145,7 +145,7 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 
 	req.Respond(&fuse.OpenResponse{
 		Handle: handleID,
-		Flags: fuse.OpenKeepCache,
+		Flags:  fuse.OpenKeepCache,
 	})
 	return nil
 }
@@ -182,13 +182,13 @@ func (conn *FuseCasfsConnection) handleReadlinkRequest(req *fuse.ReadlinkRequest
 func (conn *FuseCasfsConnection) handleListxattrRequest(req *fuse.ListxattrRequest) error {
 	return FuseError{
 		source: errors.New("xattr not supported"),
-		errno: unix.ENOTSUP,
+		errno:  unix.ENOTSUP,
 	}
 }
 
 func (conn *FuseCasfsConnection) handleGetxattrRequest(req *fuse.GetxattrRequest) error {
 	return FuseError{
 		source: errors.New("xattr not supported"),
-		errno: unix.ENOTSUP,
+		errno:  unix.ENOTSUP,
 	}
 }

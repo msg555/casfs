@@ -13,19 +13,17 @@ import (
 	"path/filepath"
 )
 
-type HashFactory func()hash.Hash
+type HashFactory func() hash.Hash
 
 type Castore struct {
-	StorageRoot	string
-	WorkDir			string
+	StorageRoot string
+	WorkDir     string
 	HashFactory
 }
 
 type ContentAddress []byte
 
-
 const TEMP_DIR string = "temp"
-
 
 func CreateCastore(storageRoot string, hashFactory HashFactory) (*Castore, error) {
 	storageRoot, err := filepath.Abs(storageRoot)
@@ -35,7 +33,7 @@ func CreateCastore(storageRoot string, hashFactory HashFactory) (*Castore, error
 
 	cas := Castore{
 		StorageRoot: storageRoot,
-		WorkDir: path.Join(storageRoot, TEMP_DIR),
+		WorkDir:     path.Join(storageRoot, TEMP_DIR),
 	}
 	if hashFactory != nil {
 		cas.HashFactory = hashFactory

@@ -25,6 +25,7 @@ const ALIGNMENT = 128
 
 type KeyType = string
 type ValueType = []byte
+type IndexType = uint64
 
 type KeyValuePair struct {
 	Key   KeyType
@@ -171,7 +172,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 			return false, err
 		}
 
-		childIndex := offset % uint64(tr.FanOut + 1)
+		childIndex := offset % uint64(tr.FanOut+1)
 		stackBlocks = append(stackBlocks, block)
 		stackIndexes = append(stackIndexes, int(childIndex))
 		if offset <= uint64(tr.FanOut) {
@@ -222,8 +223,8 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 			}
 		}
 
-		stackBlocks = stackBlocks[:stackDepth + 1]
-		stackIndexes = stackIndexes[:stackDepth + 1]
+		stackBlocks = stackBlocks[:stackDepth+1]
+		stackIndexes = stackIndexes[:stackDepth+1]
 
 		block := stackBlocks[stackDepth]
 		index := stackIndexes[stackDepth]
@@ -236,7 +237,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 
 		offset = uint64(index + 1)
 		for i := stackDepth - 1; i >= 0; i-- {
-			offset = offset * uint64(tr.FanOut + 1) + uint64(stackIndexes[i])
+			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
 		}
 		if !entryCallback(offset, string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
 			return false, nil
@@ -246,14 +247,14 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 	}
 }
 
-func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, error) {
+func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, IndexType, error) {
 	// Index 0 means block doesn't exist
 	block := make([]byte, tr.blocks.BlockSize)
 
 	for nodeIndex != 0 {
 		_, err := tr.blocks.Read(nodeIndex, block)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		lo := 0
@@ -264,7 +265,7 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, e
 
 			keylen := int(bo.Uint32(nodeData))
 			if keylen > tr.MaxKeySize {
-				return nil, errors.New("unexpected long key length")
+				return nil, 0, errors.New("unexpected long key length")
 			}
 			if keylen == 0 {
 				hi = md - 1
@@ -274,7 +275,7 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, e
 			cmp := strings.Compare(key, string(nodeData[4:4+keylen]))
 			if cmp == 0 {
 				// copy this?
-				return nodeData[4+tr.MaxKeySize : 4+tr.MaxKeySize+tr.EntrySize], nil
+				return nodeData[4+tr.MaxKeySize : 4+tr.MaxKeySize+tr.EntrySize], nodeIndex*uint64(tr.FanOut) + uint64(md), nil
 			} else if cmp == -1 {
 				hi = md - 1
 			} else {
@@ -290,7 +291,13 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, e
 		}
 	}
 
-	return nil, nil
+	return nil, 0, nil
+}
+
+func (tr *BTree) ByIndex(index IndexType) (ValueType, error) {
+	nodeIndex := blockfile.BlockIndex(index / uint64(tr.FanOut))
+	pos := int(index % uint64(tr.FanOut))
+	return tr.blocks.ReadAt(nodeIndex, 8*(tr.FanOut+1)+pos*tr.nodeSize+4+tr.MaxKeySize, tr.EntrySize, nil)
 }
 
 type treeIndexer struct {
@@ -383,7 +390,7 @@ func main() {
 	fmt.Println("Wrote at index", rootIndex)
 
 	for i := 0; i < size; i++ {
-		data, err := tr.Find(rootIndex, fmt.Sprintf("wow-%d", i))
+		data, _, err := tr.Find(rootIndex, fmt.Sprintf("wow-%d", i))
 		if err != nil {
 			log.Fatal(err)
 		}

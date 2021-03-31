@@ -21,10 +21,10 @@ type FuseCasfsConnection struct {
 	MountPoint string
 	ReadOnly   bool
 
-	rootIndex  blockfile.BlockIndex
+	rootIndex blockfile.BlockIndex
 
-	handleLock sync.RWMutex
-	handleMap	 map[fuse.HandleID]Handle
+	handleLock   sync.RWMutex
+	handleMap    map[fuse.HandleID]Handle
 	lastHandleID fuse.HandleID
 }
 
@@ -58,48 +58,48 @@ func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 
 	fmt.Println("REQUEST:", req)
 	switch req.(type) {
-  case *fuse.StatfsRequest:
-    err = conn.handleStatfsRequest(req.(*fuse.StatfsRequest))
+	case *fuse.StatfsRequest:
+		err = conn.handleStatfsRequest(req.(*fuse.StatfsRequest))
 
-  // Node methods
-  case *fuse.AccessRequest:
-    err = conn.handleAccessRequest(req.(*fuse.AccessRequest))
-  case *fuse.GetattrRequest:
-    err = conn.handleGetattrRequest(req.(*fuse.GetattrRequest))
-  case *fuse.LookupRequest:
-    err = conn.handleLookupRequest(req.(*fuse.LookupRequest))
-  case *fuse.OpenRequest:
-    err = conn.handleOpenRequest(req.(*fuse.OpenRequest))
-  case *fuse.ReadlinkRequest:
-    err = conn.handleReadlinkRequest(req.(*fuse.ReadlinkRequest))
-  case *fuse.ListxattrRequest:
-    err = conn.handleListxattrRequest(req.(*fuse.ListxattrRequest))
-  case *fuse.GetxattrRequest:
-    err = conn.handleGetxattrRequest(req.(*fuse.GetxattrRequest))
-/*
-  case *fuse.SetattrRequest:
-    nd.handleSetattrRequest(req.(*fuse.SetattrRequest))
-  case *fuse.CreateRequest:
-    nd.handleCreateRequest(req.(*fuse.CreateRequest))
-  case *fuse.RemoveRequest:
-    nd.handleRemoveRequest(req.(*fuse.RemoveRequest))
-*/
+	// Node methods
+	case *fuse.AccessRequest:
+		err = conn.handleAccessRequest(req.(*fuse.AccessRequest))
+	case *fuse.GetattrRequest:
+		err = conn.handleGetattrRequest(req.(*fuse.GetattrRequest))
+	case *fuse.LookupRequest:
+		err = conn.handleLookupRequest(req.(*fuse.LookupRequest))
+	case *fuse.OpenRequest:
+		err = conn.handleOpenRequest(req.(*fuse.OpenRequest))
+	case *fuse.ReadlinkRequest:
+		err = conn.handleReadlinkRequest(req.(*fuse.ReadlinkRequest))
+	case *fuse.ListxattrRequest:
+		err = conn.handleListxattrRequest(req.(*fuse.ListxattrRequest))
+	case *fuse.GetxattrRequest:
+		err = conn.handleGetxattrRequest(req.(*fuse.GetxattrRequest))
+		/*
+		   case *fuse.SetattrRequest:
+		     nd.handleSetattrRequest(req.(*fuse.SetattrRequest))
+		   case *fuse.CreateRequest:
+		     nd.handleCreateRequest(req.(*fuse.CreateRequest))
+		   case *fuse.RemoveRequest:
+		     nd.handleRemoveRequest(req.(*fuse.RemoveRequest))
+		*/
 
-	// fsync, forget
+		// fsync, forget
 
-  // Handle methods
-  case *fuse.ReadRequest:
-    err = conn.handleReadRequest(req.(*fuse.ReadRequest))
-  case *fuse.ReleaseRequest:
-    err = conn.handleReleaseRequest(req.(*fuse.ReleaseRequest))
-  case *fuse.FlushRequest:
-    err = conn.handleFlushRequest(req.(*fuse.FlushRequest))
-/*
-  case *fuse.WriteRequest:
-    nd.handleWriteRequest(req.(*fuse.WriteRequest))
-  case *fuse.IoctlRequest:
-    nd.handleIoctlRequest(req.(*fuse.IoctlRequest))
-*/
+	// Handle methods
+	case *fuse.ReadRequest:
+		err = conn.handleReadRequest(req.(*fuse.ReadRequest))
+	case *fuse.ReleaseRequest:
+		err = conn.handleReleaseRequest(req.(*fuse.ReleaseRequest))
+	case *fuse.FlushRequest:
+		err = conn.handleFlushRequest(req.(*fuse.FlushRequest))
+		/*
+		   case *fuse.WriteRequest:
+		     nd.handleWriteRequest(req.(*fuse.WriteRequest))
+		   case *fuse.IoctlRequest:
+		     nd.handleIoctlRequest(req.(*fuse.IoctlRequest))
+		*/
 
 	default:
 		fmt.Println("WARNING NOT IMPLEMENTED:", req)
@@ -107,7 +107,7 @@ func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 	}
 
 	if err != nil {
-    req.RespondError(WrapIOError(err))
+		req.RespondError(WrapIOError(err))
 	}
 }
 
@@ -124,15 +124,15 @@ func (conn *FuseCasfsConnection) handleStatfsRequest(req *fuse.StatfsRequest) er
 	if err != nil {
 		return err
 	}
-  req.Respond(&fuse.StatfsResponse{
-    Blocks:  stfs.Blocks,
-    Bfree:   stfs.Bfree,
-    Bavail:  stfs.Bavail,
-    Files:   stfs.Files,
-    Ffree:   stfs.Ffree,
-    Bsize:   uint32(stfs.Bsize),
-    Namelen: uint32(stfs.Namelen),
-    Frsize:  uint32(stfs.Frsize),
-  })
+	req.Respond(&fuse.StatfsResponse{
+		Blocks:  stfs.Blocks,
+		Bfree:   stfs.Bfree,
+		Bavail:  stfs.Bavail,
+		Files:   stfs.Files,
+		Ffree:   stfs.Ffree,
+		Bsize:   uint32(stfs.Bsize),
+		Namelen: uint32(stfs.Namelen),
+		Frsize:  uint32(stfs.Frsize),
+	})
 	return nil
 }

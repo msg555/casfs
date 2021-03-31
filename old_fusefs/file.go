@@ -12,10 +12,10 @@ import (
 )
 
 type FileHandle struct {
-	FileDescriptor	int
-	OpenFlags				int
+	FileDescriptor int
+	OpenFlags      int
 
-	accessLock			sync.Mutex
+	accessLock sync.Mutex
 }
 
 func CreateFileHandle(nd *NodeData, flags int) (*FileHandle, error) {
@@ -25,17 +25,16 @@ func CreateFileHandle(nd *NodeData, flags int) (*FileHandle, error) {
 	}
 	return &FileHandle{
 		FileDescriptor: fd,
-		OpenFlags: flags,
+		OpenFlags:      flags,
 	}, nil
 }
 
 func CreateFileHandleFromFD(nd *NodeData, fd int, flags int) *FileHandle {
 	return &FileHandle{
 		FileDescriptor: fd,
-		OpenFlags: flags,
+		OpenFlags:      flags,
 	}
 }
-
 
 func (hd *FileHandle) Release() error {
 	return unix.Close(hd.FileDescriptor)
@@ -84,7 +83,7 @@ func (hd *FileHandle) Write(req *fuse.WriteRequest) {
 
 	totalBytesWritten := 0
 	for totalBytesWritten < len(req.Data) {
-		bytesWritten, err := unix.Pwrite(hd.FileDescriptor, req.Data[totalBytesWritten:], req.Offset + int64(totalBytesWritten))
+		bytesWritten, err := unix.Pwrite(hd.FileDescriptor, req.Data[totalBytesWritten:], req.Offset+int64(totalBytesWritten))
 
 		totalBytesWritten += bytesWritten
 		if err != nil {

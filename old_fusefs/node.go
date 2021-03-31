@@ -30,7 +30,6 @@ func (nd *NodeData) TestAccess(req fuse.Request, mask uint32) bool {
 	return (mask & modeEffective) == mask
 }
 
-
 func (nd *NodeData) GetAttr() fuse.Attr {
 	return fuse.Attr{
 		Valid:     DURATION_DEFAULT,
