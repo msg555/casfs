@@ -50,7 +50,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("import of '%s' failed: %s", file, err)
 		} else {
-			fmt.Printf("imported '%s' as %s at block %d\n", file, hex.EncodeToString(nd.NodeAddress[:]), nd.NodeIndex)
+			fmt.Printf("imported '%s' as %s\n", file, hex.EncodeToString(nd.NodeAddress[:]))
 		}
 	}
 }

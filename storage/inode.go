@@ -7,7 +7,7 @@ import (
 	"github.com/msg555/casfs/unix"
 )
 
-const INODE_SIZE = 60 + 2*CONTENT_ADDRESS_LENGTH
+const INODE_SIZE = 60 + 3*HASH_BYTE_LENGTH
 const MODE_HARDLINK_LAYER = uint32(0xFFFFFFFF)
 
 var bo = binary.LittleEndian
@@ -24,8 +24,9 @@ type InodeData struct {
 	Ctim         uint64
 	Size         uint64
 	TreeNode     blockfile.BlockIndex
-	Address      [CONTENT_ADDRESS_LENGTH]byte
-	XattrAddress [CONTENT_ADDRESS_LENGTH]byte
+	PathHash     [HASH_BYTE_LENGTH]byte
+	Address      [HASH_BYTE_LENGTH]byte
+	XattrAddress [HASH_BYTE_LENGTH]byte
 }
 
 func (nd *InodeData) Write(buf []byte, contentHash bool) {
@@ -42,9 +43,14 @@ func (nd *InodeData) Write(buf []byte, contentHash bool) {
 	} else {
 		bo.PutUint64(buf[52:], nd.TreeNode)
 	}
-	copy(buf[60:], nd.Address[:])
-	if nd.Mode != MODE_HARDLINK_LAYER {
-		copy(buf[60+CONTENT_ADDRESS_LENGTH:], nd.XattrAddress[:])
+	copy(buf[60:], nd.PathHash[:])
+	copy(buf[60+HASH_BYTE_LENGTH:], nd.Address[:])
+	if nd.Mode != MODE_HARDLINK_LAYER || !contentHash {
+		copy(buf[60+2*HASH_BYTE_LENGTH:], nd.XattrAddress[:])
+	} else {
+		for i := 0; i < HASH_BYTE_LENGTH; i++ {
+			buf[60+2*HASH_BYTE_LENGTH+i] = 0
+		}
 	}
 }
 
@@ -58,11 +64,24 @@ func (nd *InodeData) Read(buf []byte) {
 	nd.Ctim = bo.Uint64(buf[36:])
 	nd.Size = bo.Uint64(buf[44:])
 	nd.TreeNode = bo.Uint64(buf[52:])
-	copy(nd.Address[:], buf[60:])
-	copy(nd.XattrAddress[:], buf[60+CONTENT_ADDRESS_LENGTH:])
+	copy(nd.PathHash[:], buf[60:])
+	copy(nd.Address[:], buf[60+HASH_BYTE_LENGTH:])
+	copy(nd.XattrAddress[:], buf[60+2*HASH_BYTE_LENGTH:])
 }
 
-func InodeFromStat(address []byte, xattrAddress []byte, st *unix.Stat_t) *InodeData {
+func (nd *InodeData) toBytes() []byte {
+	var buf [INODE_SIZE]byte
+	nd.Write(buf[:], false)
+	return buf[:]
+}
+
+func inodeFromBytes(buf []byte) *InodeData {
+	nd := InodeData{}
+	nd.Read(buf)
+	return &nd
+}
+
+func InodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *InodeData {
 	data := InodeData{
 		Mode: st.Mode,
 		Uid:  st.Uid,
@@ -75,6 +94,7 @@ func InodeFromStat(address []byte, xattrAddress []byte, st *unix.Stat_t) *InodeD
 	if unix.S_ISCHR(data.Mode) || unix.S_ISBLK(data.Mode) {
 		data.Dev = st.Rdev
 	}
+	copy(data.PathHash[:], pathHash)
 	copy(data.Address[:], address)
 	copy(data.XattrAddress[:], xattrAddress)
 	return &data

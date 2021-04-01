@@ -1,9 +1,8 @@
 package fusefs
 
 import (
-	"github.com/msg555/casfs"
 	"github.com/msg555/casfs/storage"
-	// "github.com/msg555/casfs/unix"
+	"github.com/msg555/casfs/unix"
 )
 
 const DIRENT_OFFSET_EOF = 0xFFFFFFFFFFFFFFFF
@@ -23,10 +22,10 @@ func direntAlign(x int) int {
 }
 
 func updateDirEntryOffset(buf []byte, offset uint64) {
-	casfs.Hbo.PutUint64(buf[8:], offset)
+	unix.Hbo.PutUint64(buf[8:], offset)
 }
 
-func addDirEntry(buf []byte, name string, ent *storage.Dirent) int {
+func addDirEntry(buf []byte, name string, inodeId uint64, inode *storage.InodeData) int {
 	/*
 	   define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 
@@ -45,9 +44,9 @@ func addDirEntry(buf []byte, name string, ent *storage.Dirent) int {
 		return 0
 	}
 
-	casfs.Hbo.PutUint64(buf[0:], ent.Inode)
-	casfs.Hbo.PutUint32(buf[16:], uint32(len(name)))
-	casfs.Hbo.PutUint32(buf[20:], uint32(ent.Type))
+	unix.Hbo.PutUint64(buf[0:], inodeId)
+	unix.Hbo.PutUint32(buf[16:], uint32(len(name)))
+	unix.Hbo.PutUint32(buf[20:], uint32(inode.Mode & unix.S_IFMT) >> 12)
 
 	copy(buf[24:], name)
 	for i := entryBaseLen; i < entryPadLen; i++ {

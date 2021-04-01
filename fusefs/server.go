@@ -1,11 +1,12 @@
 package fusefs
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
 	"bazil.org/fuse"
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/storage"
 )
 
@@ -29,13 +30,42 @@ func CreateDefaultServer() (*FuseCasfsServer, error) {
 }
 
 func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, readOnly bool, options ...fuse.MountOption) (*FuseCasfsConnection, error) {
-	rootIndex, err := srv.Storage.LookupAddressInode(contentAddress)
+	rootInode, err := srv.Storage.LookupAddressInode(contentAddress)
 	if err != nil {
 		return nil, err
-	} else if rootIndex == 0 {
+	} else if rootInode == nil {
 		return nil, errors.New("could not find root content address")
 	}
-	fmt.Println("HELLO", rootIndex)
+
+	var inodeMap *storage.InodeMap
+	if rootInode.Mode == storage.MODE_HARDLINK_LAYER {
+		fmt.Println("Found hardlink layer")
+
+		newRootInode, err := srv.Storage.LookupAddressInode(rootInode.PathHash[:])
+		if err != nil {
+			return nil, err
+		} else if newRootInode == nil {
+			return nil, errors.New("reference data layer missing")
+		}
+
+		// Read hlmap from Address
+		inodeMap = &storage.InodeMap{}
+		hlf, err := srv.Storage.Cas.Open(rootInode.XattrAddress[:])
+		if hlf == nil {
+			return nil, errors.New("could not read inode map")
+		}
+		err = inodeMap.Read(hlf)
+		if err != nil {
+			hlf.Close()
+			return nil, err
+		}
+		err = hlf.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		rootInode = newRootInode
+	}
 
 	if readOnly {
 		options = append(options, fuse.ReadOnly())
@@ -45,12 +75,19 @@ func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, read
 		return nil, err
 	}
 
+	if inodeMap != nil {
+		for k, v := range inodeMap.Map {
+			fmt.Printf("%d -> %d\n", k, v)
+		}
+	}
+
 	return &FuseCasfsConnection{
 		Conn:       conn,
 		Server:     srv,
 		MountPoint: mountPoint,
 		ReadOnly:   readOnly,
-		rootIndex:  rootIndex,
+		rootInode:  *rootInode,
+		inodeMap:   inodeMap,
 		handleMap:  make(map[fuse.HandleID]Handle),
 	}, nil
 }

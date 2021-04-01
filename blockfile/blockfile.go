@@ -2,9 +2,10 @@ package blockfile
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"os"
+
+	"github.com/go-errors/errors"
 )
 
 var bo = binary.LittleEndian
@@ -51,23 +52,25 @@ func writeAtFull(file *os.File, offset uint64, buf []byte) error {
 	return nil
 }
 
-func Open(path string, perm os.FileMode, blockSize int, readOnly bool) (*BlockFile, error) {
+func (bf *BlockFile) Open(path string, perm os.FileMode, blockSize int, readOnly bool) error {
 	flags := os.O_CREATE | os.O_RDWR
 	if readOnly {
 		flags = os.O_RDONLY
 	}
 	f, err := os.OpenFile(path, flags, perm)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	bf := &BlockFile{
-		BlockSize: blockSize,
-		file:      f,
-	}
-	bf.init()
+	bf.BlockSize = blockSize
+	bf.file = f
 
-	return bf, nil
+	err = bf.init()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Closes the underlying file handle
@@ -162,7 +165,8 @@ func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
 }
 
 func main() {
-	bf, err := Open("block.file", 0666, 128, false)
+	bf := BlockFile{}
+	err := bf.Open("block.file", 0666, 128, false)
 	if err != nil {
 		panic(err)
 	}

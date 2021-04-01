@@ -3,12 +3,12 @@ package fusefs
 //EROFS
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 
 	"bazil.org/fuse"
-	"github.com/msg555/casfs/blockfile"
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/storage"
 )
 
@@ -21,7 +21,8 @@ type FuseCasfsConnection struct {
 	MountPoint string
 	ReadOnly   bool
 
-	rootIndex blockfile.BlockIndex
+	rootInode  storage.InodeData
+	inodeMap   *storage.InodeMap
 
 	handleLock   sync.RWMutex
 	handleMap    map[fuse.HandleID]Handle
@@ -39,18 +40,22 @@ func (conn *FuseCasfsConnection) Serve() {
 	}
 }
 
-func (conn *FuseCasfsConnection) nodeIndexToNodeID(nodeIndex storage.InodeIndex) fuse.NodeID {
-	if nodeIndex == conn.rootIndex {
-		return FUSE_ROOT_ID
+func (conn *FuseCasfsConnection) remapInode(inodeId storage.InodeId) storage.InodeId {
+	if conn.inodeMap == nil {
+		return inodeId
 	}
-	return fuse.NodeID(nodeIndex << 1)
+	newInodeId, found := conn.inodeMap.Map[inodeId]
+	if found {
+		return newInodeId
+	}
+	return inodeId
 }
 
-func (conn *FuseCasfsConnection) nodeIDToNodeIndex(nodeId fuse.NodeID) storage.InodeIndex {
-	if nodeId == FUSE_ROOT_ID {
-		return conn.rootIndex
+func (conn *FuseCasfsConnection) GetInode(inodeId fuse.NodeID) (*storage.InodeData, error) {
+	if inodeId == FUSE_ROOT_ID {
+		return &conn.rootInode, nil
 	}
-	return storage.InodeIndex(nodeId) >> 1
+	return conn.Server.Storage.ReadInode(storage.InodeId(inodeId))
 }
 
 func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {

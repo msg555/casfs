@@ -5,11 +5,11 @@ import (
 )
 
 type InodeMap struct {
-	Map map[CasfsInode]CasfsInode
+	Map map[InodeId]InodeId
 }
 
 func (mp *InodeMap) Init() {
-	mp.Map = make(map[CasfsInode]CasfsInode)
+	mp.Map = make(map[InodeId]InodeId)
 }
 
 func (mp *InodeMap) Write(w io.Writer) error {
@@ -22,26 +22,24 @@ func (mp *InodeMap) Write(w io.Writer) error {
 			return err
 		}
 	}
-	bo.PutUint64(buf[0:], 0)
-	bo.PutUint64(buf[8:], 0)
-	_, err := w.Write(buf[:])
-	return err
+	return nil
 }
 
 func (mp *InodeMap) Read(r io.Reader) error {
 	var buf [16]byte
 
-	mp.Map = make(map[CasfsInode]CasfsInode)
+	mp.Map = make(map[InodeId]InodeId)
 	for {
 		_, err := r.Read(buf[:])
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			return err
 		}
-		key := CasfsInode(bo.Uint64(buf[:]))
-		val := CasfsInode(bo.Uint64(buf[8:]))
-		if key == 0 {
-			mp.Map[key] = val
-		}
+		key := InodeId(bo.Uint64(buf[:]))
+		val := InodeId(bo.Uint64(buf[8:]))
+		mp.Map[key] = val
 	}
 	return nil
 }

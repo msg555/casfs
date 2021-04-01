@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/msg555/casfs/fusefs"
+	"github.com/go-errors/errors"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
+
+	"github.com/msg555/casfs/fusefs"
 )
 
 func testIt(conn *fusefs.FuseCasfsConnection) {
@@ -64,7 +66,12 @@ func main() {
 
 	conn, err := srv.Mount(pflag.Arg(0), rootAddress, true)
 	if err != nil {
-		log.Fatal(err)
+		gerr, ok := err.(*errors.Error)
+		if ok {
+			log.Fatal(err, gerr.ErrorStack())
+		} else {
+			log.Fatal(err)
+		}
 	}
 
 	go conn.Serve()

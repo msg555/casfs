@@ -1,11 +1,12 @@
 package fusefs
 
 import (
-	"errors"
 	"io"
 	"os"
 
 	"bazil.org/fuse"
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/storage"
 	"github.com/msg555/casfs/unix"
 )
@@ -77,12 +78,13 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 
 	lastOffset := 0
 	bufOffset := 0
-	complete, err := h.Conn.Server.Storage.ScanChildren(h.InodeData, uint64(req.Offset), func(offset uint64, name string, ent *storage.Dirent) bool {
+	complete, err := h.Conn.Server.Storage.ScanChildren(h.InodeData,
+uint64(req.Offset), func(offset uint64, inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
 		if bufOffset != 0 {
 			updateDirEntryOffset(buf[lastOffset:], offset)
 		}
 
-		size := addDirEntry(buf[bufOffset:], name, ent)
+		size := addDirEntry(buf[bufOffset:], name, h.Conn.remapInode(inodeId), inode)
 		if size == 0 {
 			return false
 		}

@@ -61,6 +61,7 @@ func (cas *Castore) objectPath(addr ContentAddress) (string, string) {
 
 func (cas *Castore) Open(addr ContentAddress) (*os.File, error) {
 	objDir, objName := cas.objectPath(addr)
+	println(objDir, objName)
 	return os.Open(path.Join(objDir, objName))
 }
 

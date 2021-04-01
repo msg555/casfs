@@ -1,13 +1,14 @@
 package fusefs
 
 import (
-	"errors"
 	"io/ioutil"
 	"time"
 
 	"encoding/hex"
 
 	"bazil.org/fuse"
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/storage"
 	"github.com/msg555/casfs/unix"
 )
@@ -16,12 +17,16 @@ func nsTimestampToTime(nsTimestamp uint64) time.Time {
 	return time.Unix(int64(nsTimestamp/1000000000), int64(nsTimestamp%1000000000))
 }
 
-func (conn *FuseCasfsConnection) nodeToAttr(nodeIndex storage.InodeIndex, inode *storage.InodeData) fuse.Attr {
+func (conn *FuseCasfsConnection) nodeToAttr(inodeId storage.InodeId, inode *storage.InodeData) fuse.Attr {
+	size := inode.Size
+	if unix.S_ISDIR(inode.Mode) {
+		size = 1024
+	}
 	return fuse.Attr{
 		Valid:     DURATION_DEFAULT,
-		Inode:     uint64(conn.nodeIndexToNodeID(nodeIndex)),
-		Size:      inode.Size,
-		Blocks:    (inode.Size + 511) >> 9,
+		Inode:     inodeId,
+		Size:      size,
+		Blocks:    (size + 511) >> 9,
 		Atime:     nsTimestampToTime(inode.Atim),
 		Mtime:     nsTimestampToTime(inode.Mtim),
 		Ctime:     nsTimestampToTime(inode.Ctim),
@@ -35,7 +40,7 @@ func (conn *FuseCasfsConnection) nodeToAttr(nodeIndex storage.InodeIndex, inode 
 }
 
 func (conn *FuseCasfsConnection) handleAccessRequest(req *fuse.AccessRequest) error {
-	inode, err := conn.Server.Storage.ReadInode(conn.nodeIDToNodeIndex(req.Node))
+	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
@@ -52,52 +57,47 @@ func (conn *FuseCasfsConnection) handleAccessRequest(req *fuse.AccessRequest) er
 }
 
 func (conn *FuseCasfsConnection) handleLookupRequest(req *fuse.LookupRequest) error {
-	inode, err := conn.Server.Storage.ReadInode(conn.nodeIDToNodeIndex(req.Node))
+	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
 
-	data, err := conn.Server.Storage.LookupChild(inode, req.Name)
+	childInode, childInodeId, err := conn.Server.Storage.LookupChild(inode, req.Name)
+	childInodeId = conn.remapInode(childInodeId)
 	if err != nil {
 		return err
 	}
-	if data == nil {
+	if childInode == nil {
 		return FuseError{
-			source: errors.New("permission denied"),
-			errno:  unix.EACCES,
+			source: errors.New("file not found"),
+			errno:  unix.ENOENT,
 		}
 	}
 
-	childInode, err := conn.Server.Storage.ReadInode(data.Inode)
-	if err != nil {
-		return err
-	}
-
 	req.Respond(&fuse.LookupResponse{
-		Node:       conn.nodeIndexToNodeID(data.Inode),
+		Node:       fuse.NodeID(childInodeId),
 		Generation: 1,
 		EntryValid: DURATION_DEFAULT,
-		Attr:       conn.nodeToAttr(data.Inode, childInode),
+		Attr:       conn.nodeToAttr(childInodeId, childInode),
 	})
 
 	return nil
 }
 
 func (conn *FuseCasfsConnection) handleGetattrRequest(req *fuse.GetattrRequest) error {
-	inodeIndex := conn.nodeIDToNodeIndex(req.Node)
-	inode, err := conn.Server.Storage.ReadInode(inodeIndex)
+	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
 
 	req.Respond(&fuse.GetattrResponse{
-		Attr: conn.nodeToAttr(inodeIndex, inode),
+		Attr: conn.nodeToAttr(storage.InodeId(req.Node), inode),
 	})
 	return nil
 }
 
 func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error {
-	inode, err := conn.Server.Storage.ReadInode(conn.nodeIDToNodeIndex(req.Node))
+	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 }
 
 func (conn *FuseCasfsConnection) handleReadlinkRequest(req *fuse.ReadlinkRequest) error {
-	inode, err := conn.Server.Storage.ReadInode(conn.nodeIDToNodeIndex(req.Node))
+	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		println("FAIL1")
 		return err

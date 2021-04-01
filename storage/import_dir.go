@@ -2,25 +2,30 @@ package storage
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"sort"
 
-	"github.com/msg555/casfs/blockfile"
+	"github.com/boltdb/bolt"
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/btree"
 	"github.com/msg555/casfs/unix"
 )
 
+type hostInode struct {
+	Device uint64
+	Inode  uint64
+}
+
 type dirImportContext struct {
 	Storage         *StorageContext
-	InodeMap        map[HostInode]*dirImportNode
+	InodeMap        map[hostInode]*dirImportNode
 	IgnoreHardlinks bool
 }
 
 type dirImportNode struct {
-	NodeIndex     blockfile.BlockIndex
-	Stat          *InodeData
-	NodeAddress   [CONTENT_ADDRESS_LENGTH]byte
+	Inode         *InodeData
+	NodeAddress   [HASH_BYTE_LENGTH]byte
 	SeenLocations []dirImportNodeLocation
 }
 
@@ -30,39 +35,17 @@ type dirImportNodeLocation struct {
 }
 
 // Allocate a new inode and return a StorageNode to represent it.
-func (dc *dirImportContext) CreateStorageNodeFromStat(address []byte, st *unix.Stat_t, createCallback func(*InodeData) error) (*dirImportNode, error) {
-	nodeIndex, err := dc.Storage.InodeBlocks.Allocate()
-	if err != nil {
-		return nil, err
-	}
-
-	ist := InodeFromStat(address, nil, st)
+func (dc *dirImportContext) CreateStorageNodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *dirImportNode {
 	nd := &dirImportNode{
-		Stat:      ist,
-		NodeIndex: nodeIndex,
+		Inode:     InodeFromStat(pathHash, address, xattrAddress, st),
 	}
-	copy(nd.NodeAddress[:], dc.Storage.computeNodeAddress(ist))
-
-	if createCallback != nil {
-		err = createCallback(ist)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var buf [INODE_SIZE]byte
-	ist.Write(buf[:], false)
-	err = dc.Storage.InodeBlocks.Write(nodeIndex, buf[:])
-	if err != nil {
-		return nil, err
-	}
-
-	return nd, err
+	copy(nd.NodeAddress[:], dc.Storage.computeNodeAddress(nd.Inode))
+	return nd
 }
 
 func (dc *dirImportContext) ImportSpecial(dirFd int, path string, st *unix.Stat_t) (*dirImportNode, error) {
 	size := int64(0)
-	addr := make([]byte, CONTENT_ADDRESS_LENGTH)
+	addr := make([]byte, HASH_BYTE_LENGTH)
 	switch st.Mode & unix.S_IFMT {
 	case unix.S_IFLNK:
 		if st.Size > unix.PATH_MAX_LIMIT {
@@ -85,12 +68,7 @@ func (dc *dirImportContext) ImportSpecial(dirFd int, path string, st *unix.Stat_
 	}
 
 	st.Size = size
-	nd, err := dc.CreateStorageNodeFromStat(addr, st, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return nd, nil
+	return dc.CreateStorageNodeFromStat(nil, addr, nil, st), nil
 }
 
 func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (*dirImportNode, error) {
@@ -104,12 +82,7 @@ func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (*dirImportNode,
 	}
 
 	st.Size = size
-	nd, err := dc.CreateStorageNodeFromStat(addr, st, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return nd, nil
+	return dc.CreateStorageNodeFromStat(nil, addr, nil, st), nil
 }
 
 func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, fd int, st *unix.Stat_t) (*dirImportNode, error) {
@@ -152,7 +125,7 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 					return forwardFunc()
 				}
 
-				hostInode := HostInode{
+				hostInode := hostInode{
 					Device: childSt.Dev,
 					Inode:  childSt.Ino,
 				}
@@ -171,9 +144,9 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 
 			var childNd *dirImportNode
 			switch tp {
-			case DT_FIFO, DT_CHR, DT_BLK, DT_LNK, DT_SOCK:
+			case unix.DT_FIFO, unix.DT_CHR, unix.DT_BLK, unix.DT_LNK, unix.DT_SOCK:
 				var childSt unix.Stat_t
-				err = unix.Fstatat(fd, name, &childSt, AT_SYMLINK_NOFOLLOW)
+				err = unix.Fstatat(fd, name, &childSt, unix.AT_SYMLINK_NOFOLLOW)
 				if err != nil {
 					return nil, err
 				}
@@ -184,7 +157,7 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 				if err != nil {
 					return nil, err
 				}
-			case DT_REG, DT_DIR:
+			case unix.DT_REG, unix.DT_DIR:
 				childFd, err := unix.Openat(fd, name, unix.O_RDONLY, 0)
 				if err != nil {
 					return nil, err
@@ -197,9 +170,9 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 					return nil, err
 				}
 
-				if tp == DT_DIR {
+				if tp == unix.DT_DIR {
 					childNd, err = dc.ImportDirectory(importDepth+1, importPath+"/"+name, childFd, &childSt)
-				} else { // tp == DT_REG
+				} else { // tp == unix.DT_REG
 					childNd, err = cacheInode(&childSt, func() (*dirImportNode, error) {
 						return dc.ImportFile(childFd, &childSt)
 					})
@@ -236,112 +209,58 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 		h.Write([]byte{0})
 		h.Write(childNd.NodeAddress[:])
 	}
+	contentAddress := h.Sum(nil)
 
-	nd, err := dc.CreateStorageNodeFromStat(h.Sum(nil), st, func(stat *InodeData) error {
+	h.Reset()
+	io.WriteString(h, importPath)
+	pathHash := h.Sum(nil)
+
+	nd := dc.CreateStorageNodeFromStat(pathHash, contentAddress, nil, st)
+
+	err := dc.Storage.NodeDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
+		v := b.Get(nd.NodeAddress[:])
+		if len(v) == INODE_SIZE {
+			nd.Inode = inodeFromBytes(v)
+			return nil
+		}
+
 		// Construct Dirent btree
-		stat.Size = 0
+		nd.Inode.Size = 0
 		direntMap := make(map[string][]byte)
 		for childPath, childNd := range children {
-			stat.Size += childNd.Stat.Size
-			direntMap[childPath] = direntToBytes(Dirent{
-				Inode: childNd.NodeIndex,
-				Type:  fileTypeToDirentType(childNd.Stat.Mode),
-			})
+			nd.Inode.Size += childNd.Inode.Size
+			direntMap[childPath] = childNd.Inode.toBytes()
+		}
+		treeNode, err := dc.Storage.DirentTree.WriteRecords(direntMap)
+		if err != nil {
+			return err
 		}
 
-		var err error
-		stat.TreeNode, err = dc.Storage.DirentTree.WriteRecords(direntMap)
-		if !dc.IgnoreHardlinks && err == nil {
-			for childPath, childNd := range children {
-				_, edgeIdx, err := dc.Storage.DirentTree.Find(stat.TreeNode, childPath)
-				if err != nil {
-					return err
-				}
-				childNd.SeenLocations = append(childNd.SeenLocations, dirImportNodeLocation{
-					Path:      importPath + "/" + childPath,
-					EdgeIndex: edgeIdx,
-				})
-			}
-		}
-		return err
+		nd.Inode.TreeNode = treeNode
+		return b.Put(nd.NodeAddress[:], nd.Inode.toBytes())
 	})
-	if err != nil {
-		return nil, err
+
+	if !dc.IgnoreHardlinks && err == nil {
+		for childPath, childNd := range children {
+			_, edgeIdx, err := dc.Storage.DirentTree.Find(nd.Inode.TreeNode, childPath)
+			if err != nil {
+				return nil, err
+			}
+			childNd.SeenLocations = append(childNd.SeenLocations, dirImportNodeLocation{
+				Path:      importPath + "/" + childPath,
+				EdgeIndex: edgeIdx,
+			})
+		}
 	}
 
 	return nd, nil
 }
 
-func (dc *dirImportContext) CreateHardlinkLayer(rootNode *dirImportNode) (*StorageNode, error) {
-	dc.Storage.InodeMap.Init()
-	var linkedNodes [][]dirImportNodeLocation
-	for _, nd := range dc.InodeMap {
-		if len(nd.SeenLocations) <= 1 {
-			continue
-		}
-		sort.Slice(nd.SeenLocations, func(i, j int) bool {
-			return nd.SeenLocations[i].Path < nd.SeenLocations[j].Path
-		})
-		for _, loc := range nd.SeenLocations[1:] {
-			dc.Storage.InodeMap.Map[loc.EdgeIndex] = nd.SeenLocations[0].EdgeIndex
-		}
-		linkedNodes = append(linkedNodes, nd.SeenLocations)
-	}
-	sort.Slice(linkedNodes, func(i, j int) bool {
-		return linkedNodes[i][0].Path < linkedNodes[j][0].Path
-	})
-
-	h := dc.Storage.HashFactory()
-	h.Write(rootNode.NodeAddress[:])
-
-	var buf [4]byte
-	bo.PutUint32(buf[:], uint32(len(linkedNodes)))
-	_, err := h.Write(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	for _, linkedNode := range linkedNodes {
-		bo.PutUint32(buf[:], uint32(len(linkedNode)))
-		_, err := h.Write(buf[:])
-		if err != nil {
-			return nil, err
-		}
-		for _, loc := range linkedNode {
-			io.WriteString(h, loc.Path)
-			h.Write([]byte{0})
-		}
-	}
-	nodeAddress := h.Sum(nil)
-
-	pr, pw := io.Pipe()
-	go func() {
-		dc.Storage.InodeMap.Write(pw)
-		pw.Close()
-	}()
-	hlMapAddress, _, err := dc.Storage.Cas.Insert(pr)
-	if err != nil {
-		return nil, err
-	}
-
-	inode := &InodeData{
-		Mode:     MODE_HARDLINK_LAYER,
-		TreeNode: rootNode.NodeIndex,
-	}
-	copy(inode.Address[:], nodeAddress)
-	copy(inode.XattrAddress[:], hlMapAddress)
-
-	sn := &StorageNode{
-		NodeIndex:   rootNode.NodeIndex,
-		Stat:        inode,
-		NodeAddress: inode.Address,
-	}
-	return sn, nil
-}
-
 func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 	dc := &dirImportContext{
 		Storage:         sc,
-		InodeMap:        make(map[HostInode]*dirImportNode),
+		InodeMap:        make(map[hostInode]*dirImportNode),
 		IgnoreHardlinks: false,
 	}
 
@@ -366,12 +285,13 @@ func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 		return nil, err
 	}
 
-	if !dc.IgnoreHardlinks {
-		return dc.CreateHardlinkLayer(nd)
+	sn := &StorageNode{
+		Inode: nd.Inode,
 	}
-	return &StorageNode{
-		NodeIndex:   nd.NodeIndex,
-		Stat:        nd.Stat,
-		NodeAddress: nd.NodeAddress,
-	}, nil
+	copy(sn.NodeAddress[:], nd.NodeAddress[:])
+
+	if dc.IgnoreHardlinks {
+		return sn, nil
+	}
+	return dc.createHardlinkLayer(sn)
 }

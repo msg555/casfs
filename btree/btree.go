@@ -9,12 +9,13 @@ package btree
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/go-errors/errors"
 
 	"github.com/msg555/casfs/blockfile"
 )
@@ -49,25 +50,22 @@ type BTree struct {
 	nodeSize int
 
 	// Underlying block store to keep b-tree nodes
-	blocks *blockfile.BlockFile
+	blocks blockfile.BlockFile
 }
 
-func Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, readOnly bool) (*BTree, error) {
+func (tr *BTree) Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, readOnly bool) error {
 	nodeSize := 4 + maxKeySize + entrySize
 	blockSize := 8*(fanOut+1) + nodeSize*fanOut
-	blocks, err := blockfile.Open(path, perm, blockSize, readOnly)
+	err := tr.blocks.Open(path, perm, blockSize, readOnly)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	fmt.Println("BLOCKSIZE:", blockSize)
 
-	return &BTree{
-		MaxKeySize: maxKeySize,
-		EntrySize:  entrySize,
-		FanOut:     fanOut,
-		nodeSize:   nodeSize,
-		blocks:     blocks,
-	}, nil
+	tr.nodeSize = nodeSize
+	tr.MaxKeySize = maxKeySize
+	tr.EntrySize = entrySize
+	tr.FanOut = fanOut
+	return nil
 }
 
 func (tr *BTree) Close() error {
@@ -158,12 +156,13 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 // it will return an opaque offset that can be passed back to Scan() to resume
 // the scan starting with the record that entryCallback returned false on.
 // Scan() will return true if the scan has reached the end of the btree.
-func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallback func(offset uint64, key KeyType, value ValueType) bool) (bool, error) {
+func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallback func(offset uint64, index IndexType, key KeyType, value ValueType) bool) (bool, error) {
 	if nodeIndex == 0 {
 		return true, nil
 	}
 
 	var stackBlocks [][]byte
+	var stackBlockIndexes []blockfile.BlockIndex
 	var stackIndexes []int
 	for {
 		block := make([]byte, tr.blocks.BlockSize)
@@ -174,6 +173,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 
 		childIndex := offset % uint64(tr.FanOut+1)
 		stackBlocks = append(stackBlocks, block)
+		stackBlockIndexes = append(stackBlockIndexes, nodeIndex)
 		stackIndexes = append(stackIndexes, int(childIndex))
 		if offset <= uint64(tr.FanOut) {
 			break
@@ -204,6 +204,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 				}
 
 				stackBlocks = append(stackBlocks, block)
+				stackBlockIndexes = append(stackBlockIndexes, childIndex)
 				stackIndexes = append(stackIndexes, 0)
 				stackDepth++
 			}
@@ -224,9 +225,11 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 		}
 
 		stackBlocks = stackBlocks[:stackDepth+1]
+		stackBlockIndexes = stackBlockIndexes[:stackDepth+1]
 		stackIndexes = stackIndexes[:stackDepth+1]
 
 		block := stackBlocks[stackDepth]
+		blockIndex := stackBlockIndexes[stackDepth]
 		index := stackIndexes[stackDepth]
 		nodeData := block[8*(tr.FanOut+1)+index*tr.nodeSize:]
 
@@ -239,7 +242,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 		for i := stackDepth - 1; i >= 0; i-- {
 			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
 		}
-		if !entryCallback(offset, string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
+		if !entryCallback(offset, blockIndex * uint64(tr.FanOut) + uint64(index), string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
 			return false, nil
 		}
 
@@ -370,7 +373,8 @@ func (idx treeIndexer) sortIndex(nodeIndex int) int {
 }
 
 func main() {
-	tr, err := Open("test.btree", 0666, 16, 16, 3, false)
+	tr := BTree{}
+	err := tr.Open("test.btree", 0666, 16, 16, 3, false)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -405,7 +409,7 @@ func main() {
 	offset := uint64(0)
 	for {
 		cnt := 0
-		complete, err := tr.Scan(rootIndex, offset, func(off uint64, key string, val []byte) bool {
+		complete, err := tr.Scan(rootIndex, offset, func(off uint64, index IndexType, key string, val []byte) bool {
 			cnt++
 			if cnt > 1 {
 				offset = off

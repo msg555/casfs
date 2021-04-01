@@ -4,10 +4,13 @@ import (
 	"os"
 	"unsafe"
 
+	"github.com/go-errors/errors"
+
 	"golang.org/x/sys/unix"
 )
 
 const (
+	NAME_MAX       = 255
 	PATH_MAX       = 4096
 	PATH_MAX_LIMIT = 1 << 16
 
@@ -33,9 +36,21 @@ const (
 	EIO     = unix.EIO
 	EISDIR  = unix.EISDIR
 	ENODATA = unix.ENODATA
+	ENOENT  = unix.ENOENT
 	ENOTDIR = unix.ENOTDIR
 	ENOTSUP = unix.ENOTSUP
 	EROFS   = unix.EROFS
+
+	DT_UNKNOWN = 0
+	DT_FIFO    = S_IFIFO >> 12
+	DT_CHR     = S_IFCHR >> 12
+	DT_DIR     = S_IFDIR >> 12
+	DT_BLK     = S_IFBLK >> 12
+	DT_REG     = S_IFREG >> 12
+	DT_LNK     = S_IFLNK >> 12
+	DT_SOCK    = S_IFSOCK >> 12
+
+	AT_SYMLINK_NOFOLLOW = 0x100
 )
 
 type Stat_t = unix.Stat_t
@@ -132,10 +147,13 @@ func TestAccess(user, group bool, mode, mask uint32) bool {
 func RetrySyscallE(callSyscallE func() error) error {
 	for {
 		err := callSyscallE()
-		if err != nil && err == unix.EINTR {
+		if err == unix.EINTR {
 			continue
 		}
-		return err
+		if err == nil || err == Errno(0) {
+			return nil
+		}
+		return errors.New(err)
 	}
 }
 
@@ -143,21 +161,27 @@ func RetrySyscallE(callSyscallE func() error) error {
 func RetrySyscallIE(callSyscallIE func() (int, error)) (int, error) {
 	for {
 		n, err := callSyscallIE()
-		if err != nil && err == unix.EINTR {
+		if err == unix.EINTR {
 			continue
 		}
-		return n, err
+		if err == nil {
+			return n, nil
+		}
+		return n, errors.New(err)
 	}
 }
 
 // Invoke a syscall that returns an int and an error, retrying on EINTR
-func RetrySyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (uintptr, uintptr, Errno) {
+func RetrySyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (uintptr, uintptr, error) {
 	for {
 		r1, r2, err := unix.Syscall6(trap, a1, a2, a3, a4, a5, a6)
 		if err == unix.EINTR {
 			continue
 		}
-		return r1, r2, err
+		if err == 0 {
+			return r1, r2, nil
+		}
+		return r1, r2, errors.New(err)
 	}
 }
 
@@ -222,12 +246,8 @@ func Fstatat(dirfd int, pathname string, stat *unix.Stat_t, flags int) error {
 		return err
 	}
 
-	_, _, errno := RetrySyscall6(unix.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
-	if errno != 0 {
-		return errno
-	}
-
-	return nil
+	_, _, err = RetrySyscall6(unix.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(stat)), uintptr(flags), 0, 0)
+	return err
 }
 
 func Statfs(path string, buf *Statfs_t) error {

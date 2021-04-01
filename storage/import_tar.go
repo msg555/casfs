@@ -4,11 +4,12 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"strings"
+
+	"github.com/go-errors/errors"
 
 	"github.com/msg555/casfs/blockfile"
 	"github.com/msg555/casfs/unix"
@@ -56,7 +57,7 @@ func calcLcp(A []string, B []string) int {
 
 type TarImportRecord struct {
 	Name    string
-	Address [CONTENT_ADDRESS_LENGTH]byte
+	Address [HASH_BYTE_LENGTH]byte
 	blockfile.BlockIndex
 }
 
