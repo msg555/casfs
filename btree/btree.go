@@ -242,7 +242,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 		for i := stackDepth - 1; i >= 0; i-- {
 			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
 		}
-		if !entryCallback(offset, blockIndex * uint64(tr.FanOut) + uint64(index), string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
+		if !entryCallback(offset, blockIndex*uint64(tr.FanOut)+uint64(index), string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
 			return false, nil
 		}
 
@@ -272,6 +272,10 @@ func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, I
 			}
 			if keylen == 0 {
 				hi = md - 1
+				if hi < lo {
+					nodeIndex = bo.Uint64(block[8*md:])
+					break
+				}
 				continue
 			}
 

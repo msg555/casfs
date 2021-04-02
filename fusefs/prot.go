@@ -46,7 +46,7 @@ func addDirEntry(buf []byte, name string, inodeId uint64, inode *storage.InodeDa
 
 	unix.Hbo.PutUint64(buf[0:], inodeId)
 	unix.Hbo.PutUint32(buf[16:], uint32(len(name)))
-	unix.Hbo.PutUint32(buf[20:], uint32(inode.Mode & unix.S_IFMT) >> 12)
+	unix.Hbo.PutUint32(buf[20:], uint32(inode.Mode&unix.S_IFMT)>>12)
 
 	copy(buf[24:], name)
 	for i := entryBaseLen; i < entryPadLen; i++ {

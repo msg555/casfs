@@ -19,13 +19,11 @@ const INODE_BUCKET_NAME = "inodes"
 
 type InodeId = btree.IndexType
 
-
 type StorageContext struct {
 	Cas         *castore.Castore
 	HashFactory castore.HashFactory
 	DirentTree  btree.BTree
 	NodeDB      *bolt.DB
-	InodeMap    InodeMap
 	BasePath    string
 }
 
@@ -137,7 +135,7 @@ func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, I
 }
 
 func (sc *StorageContext) ScanChildren(nd *InodeData, offset uint64,
-direntCallback func(offset uint64, inodeId InodeId, name string, ent *InodeData) bool) (bool, error) {
+	direntCallback func(offset uint64, inodeId InodeId, name string, ent *InodeData) bool) (bool, error) {
 	return sc.DirentTree.Scan(nd.TreeNode, offset, func(offset uint64, index btree.IndexType, key string, val []byte) bool {
 		return direntCallback(offset, index, key, inodeFromBytes(val))
 	})

@@ -4,14 +4,12 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
-	"fmt"
 	"io"
 	"log"
 	"strings"
 
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/blockfile"
 	"github.com/msg555/casfs/unix"
 )
 
@@ -55,42 +53,37 @@ func calcLcp(A []string, B []string) int {
 	return i
 }
 
-type TarImportRecord struct {
-	Name    string
-	Address [HASH_BYTE_LENGTH]byte
-	blockfile.BlockIndex
-}
-
-func createDirRecord(name string, children []TarImportRecord) TarImportRecord {
-	record := TarImportRecord{
-		Name: name,
-	}
-	return record
-}
-
-func initInodeDataFromTar(header *tar.Header) (*InodeData, error) {
-	var size uint64
+func initNodeFromTar(header *tar.Header) (*InodeData, error) {
 	var dev uint64
+	var err error
 
-	mode := header.Mode & 0777
+	mode := header.Mode & 07777
 	switch header.Typeflag {
 	case tar.TypeReg:
 		mode |= unix.S_IFREG
 	case tar.TypeSymlink:
 		mode |= unix.S_IFLNK
-		size = uint64(len(header.Linkname))
 	case tar.TypeChar:
 		mode |= unix.S_IFCHR
+		dev, err = unix.Makedev(uint64(header.Devmajor), uint64(header.Devminor))
+		if err != nil {
+			return nil, err
+		}
 	case tar.TypeBlock:
 		mode |= unix.S_IFBLK
+		dev, err = unix.Makedev(uint64(header.Devmajor), uint64(header.Devminor))
+		if err != nil {
+			return nil, err
+		}
 	case tar.TypeDir:
 		mode |= unix.S_IFDIR
 	case tar.TypeFifo:
 		mode |= unix.S_IFIFO
 	default:
-		return nil, errors.New("unexpected object type in archive")
+		return nil, errors.New("unsupported object type in archive")
 	}
 
+	// TreeNode, PathHash, Address, XattrAddress
 	return &InodeData{
 		Mode: uint32(mode),
 		Uid:  uint32(header.Uid),
@@ -99,12 +92,34 @@ func initInodeDataFromTar(header *tar.Header) (*InodeData, error) {
 		Atim: uint64(header.AccessTime.Nanosecond()),
 		Mtim: uint64(header.ModTime.Nanosecond()),
 		Ctim: uint64(header.ChangeTime.Nanosecond()),
-		Size: size,
 	}, nil
+}
+
+func createMissingDirNode(fromNd *importNode) *importNode {
+	return &importNode{
+		Inode: &InodeData{
+			Mode: (fromNd.Inode.Mode & 0777) | unix.S_IFDIR,
+			Uid:  fromNd.Inode.Uid,
+			Gid:  fromNd.Inode.Gid,
+			Atim: fromNd.Inode.Atim,
+			Mtim: fromNd.Inode.Mtim,
+			Ctim: fromNd.Inode.Ctim,
+		},
+	}
+}
+
+func tarFinalizeNode(sc *StorageContext, nd *importNode, importPath string, children map[string]*importNode, ignoreHardlinks bool) error {
+	if !unix.S_ISDIR(nd.Inode.Mode) {
+		return nil
+	}
+
+	return sc.createDirentTree(nd, importPath, children, ignoreHardlinks)
 }
 
 func (sc *StorageContext) ImportTar(r io.Reader) (*StorageNode, error) {
 	br := bufio.NewReader(r)
+
+	ignoreHardlinks := false
 
 	fileHeader, err := br.Peek(2)
 	if err != nil {
@@ -121,8 +136,9 @@ func (sc *StorageContext) ImportTar(r io.Reader) (*StorageNode, error) {
 	}
 
 	var nameStack []string
-	var inodeData []*InodeData
-	var childrenStack [][]TarImportRecord
+	var nodeStack []*importNode
+	var childMapStack []map[string]*importNode
+	fileNodeMap := make(map[string]*importNode)
 
 	arch := tar.NewReader(r)
 	for {
@@ -137,72 +153,94 @@ func (sc *StorageContext) ImportTar(r io.Reader) (*StorageNode, error) {
 
 		lcp := calcLcp(nameStack, nameParts)
 		for i := len(nameStack) - 1; i >= lcp; i-- {
-			// fmt.Println("EMIT RECORD", joinPath(nameStack[:i+1]))
-			childrenStack[i-1] = append(childrenStack[i-1], createDirRecord(nameStack[i], childrenStack[i]))
-		}
-		nameStack = nameStack[:lcp]
-		inodeData = inodeData[:lcp]
-		childrenStack = childrenStack[:lcp]
-
-		var inode *InodeData
-		if record.Typeflag == tar.TypeLink {
-			println("HARDLINK", record.Linkname)
-			// Need to find hard link
-			/*
-				linkNameParts := splitPath(record.LinkName)
-				linkLcp := calcLcp(linkNameParts)
-			*/
-
-		} else {
-			inode, err = initInodeDataFromTar(record)
+			dirNd := nodeStack[i]
+			err = tarFinalizeNode(sc, dirNd, strings.Join(nameStack[:i+1], "/"), childMapStack[i], ignoreHardlinks)
 			if err != nil {
 				return nil, err
 			}
 		}
+		nameStack = nameStack[:lcp]
+		nodeStack = nodeStack[:lcp]
+		childMapStack = childMapStack[:lcp]
+
+		var nd *importNode
+		if record.Typeflag == tar.TypeLink {
+			nd = fileNodeMap[record.Linkname]
+			if nd == nil {
+				return nil, errors.New("hardlink references non-existant file")
+			}
+		} else {
+			inode, err := initNodeFromTar(record)
+			if err != nil {
+				return nil, err
+			}
+
+			switch record.Typeflag {
+			case tar.TypeSymlink:
+				addr, size, err := sc.Cas.Insert(strings.NewReader(record.Linkname))
+				if err != nil {
+					return nil, err
+				}
+				inode.Size = uint64(size)
+				copy(inode.Address[:], addr)
+			case tar.TypeReg:
+				addr, size, err := sc.Cas.Insert(arch)
+				if err != nil {
+					return nil, err
+				}
+				inode.Size = uint64(size)
+				copy(inode.Address[:], addr)
+			}
+
+			nd = &importNode{
+				Inode: inode,
+			}
+			if record.Typeflag != tar.TypeDir {
+				fileNodeMap[record.Name] = nd
+				copy(nd.NodeAddress[:], sc.computeNodeAddress(nd.Inode))
+			}
+		}
 
 		for i := lcp; i < len(nameParts); i++ {
+			addNd := nd
 			if i+1 != len(nameParts) {
 				log.Printf("Warning: missing directory entry for '%s'", joinPath(nameParts[:i+1]))
+				addNd = createMissingDirNode(nd)
 			}
+			if i > 0 {
+				if _, exists := childMapStack[i-1][nameParts[i]]; exists {
+					log.Printf("Warning: duplicate entry at '%s', using later entry", joinPath(nameParts[:i+1]))
+				}
+				childMapStack[i-1][nameParts[i]] = addNd
+			}
+
 			nameStack = append(nameStack, nameParts[i])
-			inodeData = append(inodeData, inode)
-			childrenStack = append(childrenStack, nil)
+			nodeStack = append(nodeStack, addNd)
+			childMapStack = append(childMapStack, make(map[string]*importNode))
 		}
-		fmt.Println(record.Name, len(nameParts), nameParts)
-
-		switch record.Typeflag {
-		case tar.TypeReg:
-			println("Reg file")
-		case tar.TypeLink:
-			println("link file")
-		case tar.TypeSymlink:
-			println("symlink", record.Name, record.Linkname)
-		case tar.TypeChar:
-			println("char file")
-		case tar.TypeBlock:
-			println("block file")
-		case tar.TypeDir:
-			println("DIRFILE", record.Name)
-		case tar.TypeFifo:
-			println("fifo file")
-
-		case tar.TypeGNUSparse:
-			log.Fatal("sparse files are not supported")
-
-		default:
-			log.Fatalf("Unknown tar type header '%c'", record.Typeflag)
-		}
-
-		println(record.Name)
 	}
 	for i := len(nameStack) - 1; i > 0; i-- {
-		// fmt.Println("EMIT RECORD", joinPath(nameStack[:i+1]))
-		childrenStack[i-1] = append(childrenStack[i-1], createDirRecord(nameStack[i], childrenStack[i]))
+		dirNd := nodeStack[i]
+		err = tarFinalizeNode(sc, dirNd, strings.Join(nameStack[:i+1], "/"), childMapStack[i], ignoreHardlinks)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(nodeStack) == 0 {
+		return nil, errors.New("empty archive")
 	}
 
-	createDirRecord("", childrenStack[0])
-	// fmt.Println(
-	//println(root.
+	err = tarFinalizeNode(sc, nodeStack[0], "", childMapStack[0], ignoreHardlinks)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, errors.New("not implemented")
+	rootNode := &StorageNode{
+		Inode:       nodeStack[0].Inode,
+		NodeAddress: nodeStack[0].NodeAddress,
+	}
+	if ignoreHardlinks {
+		return rootNode, nil
+	}
+	return sc.createHardlinkLayer(rootNode, fileNodeMap)
 }

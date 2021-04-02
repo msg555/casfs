@@ -21,8 +21,8 @@ type FuseCasfsConnection struct {
 	MountPoint string
 	ReadOnly   bool
 
-	rootInode  storage.InodeData
-	inodeMap   *storage.InodeMap
+	rootInode storage.InodeData
+	inodeMap  *storage.InodeMap
 
 	handleLock   sync.RWMutex
 	handleMap    map[fuse.HandleID]Handle

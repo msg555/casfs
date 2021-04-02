@@ -57,6 +57,19 @@ type Stat_t = unix.Stat_t
 type Statfs_t = unix.Statfs_t
 type Errno = unix.Errno
 
+// Supports basic makedev implementation. Most kernels support major/minors
+// larger than 255 however how this is encoded varies between kernels therefore
+// we only support 8 bit major/minors which is consistently represented.
+func Makedev(major, minor uint64) (uint64, error) {
+	if 255 < major {
+		return 0, errors.New("major number too large")
+	}
+	if 255 < minor {
+		return 0, errors.New("minor number too large")
+	}
+	return major<<8 | minor, nil
+}
+
 func S_ISDIR(mode uint32) bool {
 	return ((mode & S_IFMT) == S_IFDIR)
 }

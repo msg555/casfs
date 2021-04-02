@@ -79,19 +79,19 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 	lastOffset := 0
 	bufOffset := 0
 	complete, err := h.Conn.Server.Storage.ScanChildren(h.InodeData,
-uint64(req.Offset), func(offset uint64, inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
-		if bufOffset != 0 {
-			updateDirEntryOffset(buf[lastOffset:], offset)
-		}
+		uint64(req.Offset), func(offset uint64, inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
+			if bufOffset != 0 {
+				updateDirEntryOffset(buf[lastOffset:], offset)
+			}
 
-		size := addDirEntry(buf[bufOffset:], name, h.Conn.remapInode(inodeId), inode)
-		if size == 0 {
-			return false
-		}
-		lastOffset = bufOffset
-		bufOffset += size
-		return true
-	})
+			size := addDirEntry(buf[bufOffset:], name, h.Conn.remapInode(inodeId), inode)
+			if size == 0 {
+				return false
+			}
+			lastOffset = bufOffset
+			bufOffset += size
+			return true
+		})
 	if err != nil {
 		return err
 	}
