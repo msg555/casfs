@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/storage"
+	"github.com/msg555/ctrfs/storage"
 )
 
 func help() {

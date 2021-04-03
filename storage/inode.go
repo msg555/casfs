@@ -3,8 +3,8 @@ package storage
 import (
 	"encoding/binary"
 
-	"github.com/msg555/casfs/blockfile"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/blockfile"
+	"github.com/msg555/ctrfs/unix"
 )
 
 const INODE_SIZE = 60 + 3*HASH_BYTE_LENGTH

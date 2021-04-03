@@ -6,7 +6,7 @@ import (
 	"bazil.org/fuse"
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/storage"
+	"github.com/msg555/ctrfs/storage"
 )
 
 const DURATION_DEFAULT time.Duration = time.Duration(1000000000 * 60 * 60)

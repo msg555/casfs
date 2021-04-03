@@ -7,8 +7,8 @@ import (
 
 	"github.com/boltdb/bolt"
 
-	"github.com/msg555/casfs/btree"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/btree"
+	"github.com/msg555/ctrfs/unix"
 )
 
 type importNode struct {

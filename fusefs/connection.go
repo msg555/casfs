@@ -9,7 +9,7 @@ import (
 	"bazil.org/fuse"
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/storage"
+	"github.com/msg555/ctrfs/storage"
 )
 
 const FUSE_ROOT_ID fuse.NodeID = 1

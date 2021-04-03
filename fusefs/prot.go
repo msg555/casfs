@@ -1,8 +1,8 @@
 package fusefs
 
 import (
-	"github.com/msg555/casfs/storage"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/storage"
+	"github.com/msg555/ctrfs/unix"
 )
 
 const DIRENT_OFFSET_EOF = 0xFFFFFFFFFFFFFFFF

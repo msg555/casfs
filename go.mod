@@ -1,4 +1,4 @@
-module github.com/msg555/casfs
+module github.com/msg555/ctrfs
 
 go 1.16
 

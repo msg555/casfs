@@ -7,9 +7,9 @@ import (
 	"os/user"
 	"path"
 
-	"github.com/msg555/casfs/btree"
-	"github.com/msg555/casfs/castore"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/btree"
+	"github.com/msg555/ctrfs/castore"
+	"github.com/msg555/ctrfs/unix"
 
 	"github.com/boltdb/bolt"
 )

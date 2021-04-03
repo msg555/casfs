@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"bazil.org/fuse"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/unix"
 )
 
 type FuseError struct {

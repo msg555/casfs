@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 
-	"github.com/msg555/casfs/fusefs"
+	"github.com/msg555/ctrfs/fusefs"
 )
 
 func testIt(conn *fusefs.FuseCasfsConnection) {

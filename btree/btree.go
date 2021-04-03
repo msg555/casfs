@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/blockfile"
+	"github.com/msg555/ctrfs/blockfile"
 )
 
 var bo = binary.LittleEndian

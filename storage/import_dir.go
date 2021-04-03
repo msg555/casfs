@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/unix"
 )
 
 type hostInode struct {

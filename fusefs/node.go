@@ -7,8 +7,8 @@ import (
 	"bazil.org/fuse"
 	"github.com/go-errors/errors"
 
-	"github.com/msg555/casfs/storage"
-	"github.com/msg555/casfs/unix"
+	"github.com/msg555/ctrfs/storage"
+	"github.com/msg555/ctrfs/unix"
 )
 
 func nsTimestampToTime(nsTimestamp uint64) time.Time {
