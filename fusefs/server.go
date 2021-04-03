@@ -1,7 +1,6 @@
 package fusefs
 
 import (
-	"fmt"
 	"time"
 
 	"bazil.org/fuse"
@@ -39,8 +38,6 @@ func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, read
 
 	var inodeMap *storage.InodeMap
 	if rootInode.Mode == storage.MODE_HARDLINK_LAYER {
-		fmt.Println("Found hardlink layer")
-
 		newRootInode, err := srv.Storage.LookupAddressInode(rootInode.PathHash[:])
 		if err != nil {
 			return nil, err
@@ -73,12 +70,6 @@ func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, read
 	conn, err := fuse.Mount(mountPoint, options...)
 	if err != nil {
 		return nil, err
-	}
-
-	if inodeMap != nil {
-		for k, v := range inodeMap.Map {
-			fmt.Printf("%d -> %d\n", k, v)
-		}
 	}
 
 	return &FuseCasfsConnection{

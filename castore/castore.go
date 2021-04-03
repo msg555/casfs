@@ -5,7 +5,6 @@ package castore
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"hash"
 	"io"
 	"os"
@@ -50,7 +49,6 @@ func CreateCastore(storageRoot string, hashFactory HashFactory) (*Castore, error
 
 func (cas *Castore) objectPath(addr ContentAddress) (string, string) {
 	hexAddr := hex.EncodeToString(addr)
-	fmt.Println(hexAddr)
 
 	return path.Join(
 		cas.StorageRoot,
@@ -61,7 +59,6 @@ func (cas *Castore) objectPath(addr ContentAddress) (string, string) {
 
 func (cas *Castore) Open(addr ContentAddress) (*os.File, error) {
 	objDir, objName := cas.objectPath(addr)
-	println(objDir, objName)
 	return os.Open(path.Join(objDir, objName))
 }
 

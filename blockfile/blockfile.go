@@ -82,6 +82,9 @@ func (bf *BlockFile) init() error {
 	bf.internalBlockSize = bf.BlockSize + 8
 
 	pos, err := bf.file.Seek(0, 2)
+	if err != nil {
+		return err
+	}
 	if pos%int64(bf.internalBlockSize) != 0 {
 		return errors.New("unexpected file length")
 	}
@@ -97,7 +100,6 @@ func (bf *BlockFile) init() error {
 		bf.Allocate()
 	}
 
-	fmt.Println("Got", pos, err)
 	return nil
 }
 
@@ -151,7 +153,7 @@ func (bf *BlockFile) Read(index BlockIndex, buf []byte) ([]byte, error) {
 func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, error) {
 	if sz < 0 || sz > bf.BlockSize {
 		return nil, errors.New("invalid block size")
-	} else if off < 0 || off >= bf.BlockSize-sz {
+	} else if off < 0 || off > bf.BlockSize-sz {
 		return nil, errors.New("read outside of block")
 	}
 	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+uint64(8+off), sz, buf)

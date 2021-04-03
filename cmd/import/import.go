@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/go-errors/errors"
+
 	"github.com/msg555/casfs/storage"
 )
 
@@ -48,7 +50,12 @@ func main() {
 			}
 		}
 		if err != nil {
-			log.Fatalf("import of '%s' failed: %s", file, err)
+			gerr, ok := err.(*errors.Error)
+			if ok {
+				log.Fatalf("improt of '%s' failed: %s\n%s", file, err, gerr.ErrorStack())
+			} else {
+				log.Fatalf("import of '%s' failed: %s", file, err)
+			}
 		} else {
 			fmt.Printf("imported '%s' as %s\n", file, hex.EncodeToString(nd.NodeAddress[:]))
 		}

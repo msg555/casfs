@@ -61,7 +61,7 @@ func (conn *FuseCasfsConnection) GetInode(inodeId fuse.NodeID) (*storage.InodeDa
 func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 	var err error
 
-	fmt.Println("REQUEST:", req)
+	// fmt.Println("REQUEST:", req)
 	switch req.(type) {
 	case *fuse.StatfsRequest:
 		err = conn.handleStatfsRequest(req.(*fuse.StatfsRequest))
@@ -105,6 +105,9 @@ func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 		   case *fuse.IoctlRequest:
 		     nd.handleIoctlRequest(req.(*fuse.IoctlRequest))
 		*/
+
+	case *fuse.DestroyRequest:
+		fmt.Println("TODO: Got destroy request")
 
 	default:
 		fmt.Println("WARNING NOT IMPLEMENTED:", req)

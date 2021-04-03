@@ -14,6 +14,7 @@ import (
 	"github.com/boltdb/bolt"
 )
 
+const DIRENT_BTREE_FANOUT = 9
 const HASH_BYTE_LENGTH = 32
 const INODE_BUCKET_NAME = "inodes"
 
@@ -71,7 +72,7 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 
 	// Choose a fan out to ensure block is under 4KB
 	err = sc.DirentTree.Open(path.Join(basePath, "dirent.bin"),
-		0666, unix.NAME_MAX, INODE_SIZE, 14, false)
+		0666, unix.NAME_MAX, INODE_SIZE, DIRENT_BTREE_FANOUT, false)
 	if err != nil {
 		sc.Close()
 		return nil, err

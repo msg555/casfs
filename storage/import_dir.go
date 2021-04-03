@@ -48,6 +48,7 @@ func (dc *dirImportContext) ImportSpecial(dirFd int, path string, st *unix.Stat_
 		if err != nil {
 			return nil, err
 		}
+	case unix.S_IFBLK, unix.S_IFCHR, unix.S_IFIFO, unix.S_IFSOCK:
 	default:
 		return nil, errors.New("unsupported special file type")
 	}

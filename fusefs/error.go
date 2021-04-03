@@ -17,7 +17,6 @@ func (err FuseError) Error() string {
 }
 
 func (err FuseError) Errno() fuse.Errno {
-	println("Yielded error", err.errno)
 	return fuse.Errno(err.errno)
 }
 

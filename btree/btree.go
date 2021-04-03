@@ -395,8 +395,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Wrote at index", rootIndex)
-
 	for i := 0; i < size; i++ {
 		data, _, err := tr.Find(rootIndex, fmt.Sprintf("wow-%d", i))
 		if err != nil {
@@ -405,8 +403,6 @@ func main() {
 
 		if data == nil {
 			log.Fatal("no data found")
-		} else {
-			fmt.Println("Got data:", data)
 		}
 	}
 
@@ -419,7 +415,6 @@ func main() {
 				offset = off
 				return false
 			}
-			fmt.Println("Found", key)
 			return true
 		})
 		if err != nil {

@@ -4,8 +4,6 @@ import (
 	"io/ioutil"
 	"time"
 
-	"encoding/hex"
-
 	"bazil.org/fuse"
 	"github.com/go-errors/errors"
 
@@ -153,19 +151,15 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 func (conn *FuseCasfsConnection) handleReadlinkRequest(req *fuse.ReadlinkRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
-		println("FAIL1")
 		return err
 	}
 
-	println(hex.EncodeToString(inode.Address[:]))
 	fin, err := conn.Server.Storage.Cas.Open(inode.Address[:])
 	if err != nil {
-		println("FAIL2", err)
 		return err
 	}
 
 	target, err := ioutil.ReadAll(fin)
-	println("GOT TARGET", target)
 	if err != nil {
 		fin.Close()
 		return err
