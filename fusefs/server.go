@@ -64,6 +64,7 @@ func (srv *FuseCasfsServer) Mount(mountPoint string, contentAddress []byte, read
 		rootInode = newRootInode
 	}
 
+	options = append(options, fuse.Subtype("ctrfs"))
 	if readOnly {
 		options = append(options, fuse.ReadOnly())
 	}

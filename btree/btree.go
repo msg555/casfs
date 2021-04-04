@@ -56,7 +56,8 @@ type BTree struct {
 func (tr *BTree) Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, readOnly bool) error {
 	nodeSize := 4 + maxKeySize + entrySize
 	blockSize := 8*(fanOut+1) + nodeSize*fanOut
-	err := tr.blocks.Open(path, perm, blockSize, readOnly)
+	tr.blocks.BlockSize = blockSize
+	err := tr.blocks.Open(path, perm, readOnly)
 	if err != nil {
 		return err
 	}

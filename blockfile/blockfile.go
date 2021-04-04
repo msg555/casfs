@@ -2,7 +2,6 @@ package blockfile
 
 import (
 	"encoding/binary"
-	"fmt"
 	"os"
 
 	"github.com/go-errors/errors"
@@ -12,10 +11,19 @@ var bo = binary.LittleEndian
 
 type BlockIndex = uint64
 
+// Manages access to a blockfile, allowing blocks to be allocated, deleted,
+// read, and written to. The Allocate() and Delete() methods are not thread safe
+// and it is the responsibility of the caller to ensure that multiple
+// threads/processes are not calling these methods at the same time. Note that
+// the blockfile does not ever shrink and has size proportional to the largest
+// number of blocks that were simultaneously allocated.
 type BlockFile struct {
+	// The size in bytes of each block. This is the number of bytes that will be
+	// read or should be written. Note that internally there is a small amount of
+	// overhead on top of this per block.
 	BlockSize int
-	file      *os.File
 
+	file              *os.File
 	internalBlockSize int
 	blocks            BlockIndex
 	freeListHead      BlockIndex
@@ -52,25 +60,28 @@ func writeAtFull(file *os.File, offset uint64, buf []byte) error {
 	return nil
 }
 
-func (bf *BlockFile) Open(path string, perm os.FileMode, blockSize int, readOnly bool) error {
+// Initializes the blockfile based on the passed file pointer. This file handle
+// will be closed when bf.Close() is later invoked and show not be closed by
+// the caller.
+func (bf *BlockFile) OpenFile(file *os.File) error {
+	bf.file = file
+	return bf.init()
+}
+
+// Opens the passed blockfile, creating it if necessary using `perm`
+// permissions. If readOnly is set perm is ignored and the open will
+// fail if the file does not exist.
+func (bf *BlockFile) Open(path string, perm os.FileMode, readOnly bool) error {
 	flags := os.O_CREATE | os.O_RDWR
 	if readOnly {
 		flags = os.O_RDONLY
 	}
-	f, err := os.OpenFile(path, flags, perm)
+	file, err := os.OpenFile(path, flags, perm)
 	if err != nil {
 		return err
 	}
 
-	bf.BlockSize = blockSize
-	bf.file = f
-
-	err = bf.init()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return bf.OpenFile(file)
 }
 
 // Closes the underlying file handle
@@ -103,6 +114,8 @@ func (bf *BlockFile) init() error {
 	return nil
 }
 
+// Allocate a new block and returns the index. The index is a positive uint64
+// that will never exceed the maximum number of simultaneously allocated blocks.
 func (bf *BlockFile) Allocate() (BlockIndex, error) {
 	if bf.freeListHead == 0 {
 		err := bf.file.Truncate(int64(bf.internalBlockSize) * int64(bf.blocks+1))
@@ -129,6 +142,7 @@ func (bf *BlockFile) Allocate() (BlockIndex, error) {
 	return index, nil
 }
 
+// Free a block and allow it to be allocated in the future.
 func (bf *BlockFile) Free(index BlockIndex) error {
 	var buf [8]byte
 
@@ -146,10 +160,14 @@ func (bf *BlockFile) Free(index BlockIndex) error {
 	return nil
 }
 
+// Read an entire block into the passed buffer. If the buffer is not large
+// enough (or nil) a new array will be allocated and returned.
 func (bf *BlockFile) Read(index BlockIndex, buf []byte) ([]byte, error) {
 	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+8, int(bf.BlockSize), buf)
 }
 
+// Read part of a block into the passed buffer. If the buffer is not large
+// enough (or nil) a new array will be allocated and returned.
 func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, error) {
 	if sz < 0 || sz > bf.BlockSize {
 		return nil, errors.New("invalid block size")
@@ -159,6 +177,8 @@ func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, 
 	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+uint64(8+off), sz, buf)
 }
 
+// Write an entire block to the block file. buf must be exactly bf.BlockSize in
+// length.
 func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
 	if len(buf) != int(bf.BlockSize) {
 		return errors.New("can only make writes of size BlockSize")
@@ -166,27 +186,12 @@ func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
 	return writeAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+8, buf)
 }
 
-func main() {
-	bf := BlockFile{}
-	err := bf.Open("block.file", 0666, 128, false)
-	if err != nil {
-		panic(err)
+// Write part of a block to the block file.
+func (bf *BlockFile) WriteAt(index BlockIndex, off int, buf []byte) error {
+	if len(buf) > bf.BlockSize {
+		return errors.New("write data too large")
+	} else if off < 0 || off > bf.BlockSize-len(buf) {
+		return errors.New("write outside of block")
 	}
-	defer bf.Close()
-
-	id, err := bf.Allocate()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Allocate", id)
-
-	/*
-		for i := BlockIndex(1); i <= id; i++ {
-			err = bf.Free(BlockIndex(i))
-		}
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println("Free", id)
-	*/
+	return writeAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+uint64(8+off), buf)
 }
