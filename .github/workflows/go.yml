@@ -19,7 +19,7 @@ jobs:
         go-version: 1.15
 
     - name: Format Check
-      run: [ -z "$(gofmt -l .)" ]
+      run: bash -c '[ -z "$(gofmt -l .)" ]'
 
     - name: Vet Check
       run: go vet ./...
@@ -39,4 +39,3 @@ jobs:
 
     - name: Test
       run: go test -v ./...
-
