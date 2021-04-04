@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"hash"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -63,7 +64,7 @@ func (cas *Castore) Open(addr ContentAddress) (*os.File, error) {
 }
 
 func (cas *Castore) Insert(data io.Reader) (ContentAddress, int64, error) {
-	f, err := os.CreateTemp(cas.WorkDir, "data-")
+	f, err := ioutil.TempFile(cas.WorkDir, "data-")
 	if err != nil {
 		return nil, 0, err
 	}
