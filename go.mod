@@ -9,5 +9,3 @@ require (
 	github.com/spf13/pflag v1.0.5
 	golang.org/x/sys v0.0.0-20191210023423-ac6580df4449
 )
-
-replace bazil.org/fuse => /home/msg/go/src/github.com/msg555/fuse
