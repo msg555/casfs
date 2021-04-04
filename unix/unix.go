@@ -39,6 +39,7 @@ const (
 	EISDIR  = unix.EISDIR
 	ENODATA = unix.ENODATA
 	ENOENT  = unix.ENOENT
+	ENOSYS  = unix.ENOSYS
 	ENOTDIR = unix.ENOTDIR
 	ENOTSUP = unix.ENOTSUP
 	EROFS   = unix.EROFS

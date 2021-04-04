@@ -16,7 +16,7 @@ type Handle interface {
 	Release(*fuse.ReleaseRequest) error
 }
 
-func (conn *FuseCasfsConnection) handleReleaseRequest(req *fuse.ReleaseRequest) error {
+func (conn *Connection) handleReleaseRequest(req *fuse.ReleaseRequest) error {
 	conn.handleLock.Lock()
 	handle, ok := conn.handleMap[req.Handle]
 	delete(conn.handleMap, req.Handle)
@@ -31,7 +31,7 @@ func (conn *FuseCasfsConnection) handleReleaseRequest(req *fuse.ReleaseRequest) 
 	return handle.Release(req)
 }
 
-func (conn *FuseCasfsConnection) handleReadRequest(req *fuse.ReadRequest) error {
+func (conn *Connection) handleReadRequest(req *fuse.ReadRequest) error {
 	conn.handleLock.RLock()
 	handle, ok := conn.handleMap[req.Handle]
 	conn.handleLock.RUnlock()
@@ -45,13 +45,13 @@ func (conn *FuseCasfsConnection) handleReadRequest(req *fuse.ReadRequest) error 
 	return handle.Read(req)
 }
 
-func (conn *FuseCasfsConnection) handleFlushRequest(req *fuse.FlushRequest) error {
+func (conn *Connection) handleFlushRequest(req *fuse.FlushRequest) error {
 	// Read only file system, flush does nothing
 	req.Respond()
 	return nil
 }
 
-func (conn *FuseCasfsConnection) OpenHandle(handle Handle) fuse.HandleID {
+func (conn *Connection) OpenHandle(handle Handle) fuse.HandleID {
 	conn.handleLock.Lock()
 	conn.lastHandleID++
 	handleID := conn.lastHandleID
@@ -61,7 +61,7 @@ func (conn *FuseCasfsConnection) OpenHandle(handle Handle) fuse.HandleID {
 }
 
 type FileHandleDir struct {
-	Conn *FuseCasfsConnection
+	Conn *Connection
 	*storage.InodeData
 }
 
@@ -78,7 +78,7 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 
 	lastOffset := 0
 	bufOffset := 0
-	complete, err := h.Conn.Server.Storage.ScanChildren(h.InodeData,
+	complete, err := h.Conn.Storage.ScanChildren(h.InodeData,
 		uint64(req.Offset), func(offset uint64, inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
 			if bufOffset != 0 {
 				updateDirEntryOffset(buf[lastOffset:], offset)

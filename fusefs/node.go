@@ -15,7 +15,7 @@ func nsTimestampToTime(nsTimestamp uint64) time.Time {
 	return time.Unix(int64(nsTimestamp/1000000000), int64(nsTimestamp%1000000000))
 }
 
-func (conn *FuseCasfsConnection) nodeToAttr(inodeId storage.InodeId, inode *storage.InodeData) fuse.Attr {
+func (conn *Connection) nodeToAttr(inodeId storage.InodeId, inode *storage.InodeData) fuse.Attr {
 	size := inode.Size
 	if unix.S_ISDIR(inode.Mode) {
 		size = 1024
@@ -37,7 +37,7 @@ func (conn *FuseCasfsConnection) nodeToAttr(inodeId storage.InodeId, inode *stor
 	}
 }
 
-func (conn *FuseCasfsConnection) handleAccessRequest(req *fuse.AccessRequest) error {
+func (conn *Connection) handleAccessRequest(req *fuse.AccessRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
@@ -54,13 +54,13 @@ func (conn *FuseCasfsConnection) handleAccessRequest(req *fuse.AccessRequest) er
 	return nil
 }
 
-func (conn *FuseCasfsConnection) handleLookupRequest(req *fuse.LookupRequest) error {
+func (conn *Connection) handleLookupRequest(req *fuse.LookupRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
 
-	childInode, childInodeId, err := conn.Server.Storage.LookupChild(inode, req.Name)
+	childInode, childInodeId, err := conn.Storage.LookupChild(inode, req.Name)
 	childInodeId = conn.remapInode(childInodeId)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (conn *FuseCasfsConnection) handleLookupRequest(req *fuse.LookupRequest) er
 	return nil
 }
 
-func (conn *FuseCasfsConnection) handleGetattrRequest(req *fuse.GetattrRequest) error {
+func (conn *Connection) handleGetattrRequest(req *fuse.GetattrRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func (conn *FuseCasfsConnection) handleGetattrRequest(req *fuse.GetattrRequest) 
 	return nil
 }
 
-func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error {
+func (conn *Connection) handleOpenRequest(req *fuse.OpenRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
@@ -128,7 +128,7 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 			InodeData: inode,
 		})
 	case unix.S_IFREG:
-		file, err := conn.Server.Storage.Cas.Open(inode.Address[:])
+		file, err := conn.Storage.Cas.Open(inode.Address[:])
 		if err != nil {
 			return err
 		}
@@ -148,13 +148,13 @@ func (conn *FuseCasfsConnection) handleOpenRequest(req *fuse.OpenRequest) error 
 	return nil
 }
 
-func (conn *FuseCasfsConnection) handleReadlinkRequest(req *fuse.ReadlinkRequest) error {
+func (conn *Connection) handleReadlinkRequest(req *fuse.ReadlinkRequest) error {
 	inode, err := conn.GetInode(req.Node)
 	if err != nil {
 		return err
 	}
 
-	fin, err := conn.Server.Storage.Cas.Open(inode.Address[:])
+	fin, err := conn.Storage.Cas.Open(inode.Address[:])
 	if err != nil {
 		return err
 	}
@@ -173,14 +173,14 @@ func (conn *FuseCasfsConnection) handleReadlinkRequest(req *fuse.ReadlinkRequest
 	return nil
 }
 
-func (conn *FuseCasfsConnection) handleListxattrRequest(req *fuse.ListxattrRequest) error {
+func (conn *Connection) handleListxattrRequest(req *fuse.ListxattrRequest) error {
 	return FuseError{
 		source: errors.New("xattr not supported"),
 		errno:  unix.ENOTSUP,
 	}
 }
 
-func (conn *FuseCasfsConnection) handleGetxattrRequest(req *fuse.GetxattrRequest) error {
+func (conn *Connection) handleGetxattrRequest(req *fuse.GetxattrRequest) error {
 	return FuseError{
 		source: errors.New("xattr not supported"),
 		errno:  unix.ENOTSUP,

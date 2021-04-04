@@ -10,14 +10,15 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/msg555/ctrfs/storage"
+	"github.com/msg555/ctrfs/unix"
 )
 
 const FUSE_ROOT_ID fuse.NodeID = 1
 const FUSE_UNKNOWN_INO fuse.NodeID = 0xffffffff
 
-type FuseCasfsConnection struct {
+type Connection struct {
 	Conn       *fuse.Conn
-	Server     *FuseCasfsServer
+	Storage    *storage.StorageContext
 	MountPoint string
 	ReadOnly   bool
 
@@ -29,18 +30,17 @@ type FuseCasfsConnection struct {
 	lastHandleID fuse.HandleID
 }
 
-func (conn *FuseCasfsConnection) Serve() {
+func (conn *Connection) Serve() error {
 	for {
 		req, err := conn.Conn.ReadRequest()
 		if err != nil {
-			conn.Server.Fail <- err
-			return
+			return err
 		}
 		go conn.handleRequest(req)
 	}
 }
 
-func (conn *FuseCasfsConnection) remapInode(inodeId storage.InodeId) storage.InodeId {
+func (conn *Connection) remapInode(inodeId storage.InodeId) storage.InodeId {
 	if conn.inodeMap == nil {
 		return inodeId
 	}
@@ -51,14 +51,14 @@ func (conn *FuseCasfsConnection) remapInode(inodeId storage.InodeId) storage.Ino
 	return inodeId
 }
 
-func (conn *FuseCasfsConnection) GetInode(inodeId fuse.NodeID) (*storage.InodeData, error) {
+func (conn *Connection) GetInode(inodeId fuse.NodeID) (*storage.InodeData, error) {
 	if inodeId == FUSE_ROOT_ID {
 		return &conn.rootInode, nil
 	}
-	return conn.Server.Storage.ReadInode(storage.InodeId(inodeId))
+	return conn.Storage.ReadInode(storage.InodeId(inodeId))
 }
 
-func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
+func (conn *Connection) handleRequest(req fuse.Request) {
 	var err error
 
 	// fmt.Println("REQUEST:", req)
@@ -106,6 +106,14 @@ func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 		     nd.handleIoctlRequest(req.(*fuse.IoctlRequest))
 		*/
 
+	// Not implemented/rely on default kernel level behavior. These failures are
+	// cached by the fuse-driver and future calls will be automatically skipped.
+	case *fuse.PollRequest:
+		err = FuseError{
+			source: errors.New("not implemented"),
+			errno:  unix.ENOSYS,
+		}
+
 	case *fuse.DestroyRequest:
 		fmt.Println("TODO: Got destroy request")
 
@@ -119,7 +127,7 @@ func (conn *FuseCasfsConnection) handleRequest(req fuse.Request) {
 	}
 }
 
-func (conn *FuseCasfsConnection) Close() error {
+func (conn *Connection) Close() error {
 	err := fuse.Unmount(conn.MountPoint)
 	if err != nil {
 		return err
@@ -127,8 +135,8 @@ func (conn *FuseCasfsConnection) Close() error {
 	return conn.Conn.Close()
 }
 
-func (conn *FuseCasfsConnection) handleStatfsRequest(req *fuse.StatfsRequest) error {
-	stfs, err := conn.Server.Storage.Statfs()
+func (conn *Connection) handleStatfsRequest(req *fuse.StatfsRequest) error {
+	stfs, err := conn.Storage.Statfs()
 	if err != nil {
 		return err
 	}
