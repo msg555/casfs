@@ -14,9 +14,11 @@ const (
 	PATH_MAX       = 4096
 	PATH_MAX_LIMIT = 1 << 16
 
-	O_RDONLY = unix.O_RDONLY
-	O_RDWR   = unix.O_RDWR
-	O_WRONLY = unix.O_WRONLY
+	O_NOFOLLOW = unix.O_NOFOLLOW
+	O_PATH     = unix.O_PATH
+	O_RDONLY   = unix.O_RDONLY
+	O_RDWR     = unix.O_RDWR
+	O_WRONLY   = unix.O_WRONLY
 
 	S_IFMT   = unix.S_IFMT
 	S_IFBLK  = unix.S_IFBLK

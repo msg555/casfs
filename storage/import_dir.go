@@ -28,16 +28,22 @@ func (dc *dirImportContext) CreateStorageNodeFromStat(pathHash, address, xattrAd
 	return nd
 }
 
-func (dc *dirImportContext) ImportSpecial(dirFd int, path string, st *unix.Stat_t) (*importNode, error) {
+func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (*importNode, error) {
 	size := int64(0)
 	addr := make([]byte, HASH_BYTE_LENGTH)
+	var err error
 	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
+		addr, size, err = dc.Storage.Cas.Insert(fdReader{FileDescriptor: fd})
+		if err != nil {
+			return nil, err
+		}
 	case unix.S_IFLNK:
 		if st.Size > unix.PATH_MAX_LIMIT {
 			return nil, errors.New("symlink path too long")
 		}
 		buf := make([]byte, st.Size+1)
-		n, err := unix.Readlinkat(dirFd, path, buf)
+		n, err := unix.Readlinkat(fd, "", buf)
 		if err != nil {
 			return nil, err
 		} else if int64(n) != st.Size {
@@ -51,20 +57,6 @@ func (dc *dirImportContext) ImportSpecial(dirFd int, path string, st *unix.Stat_
 	case unix.S_IFBLK, unix.S_IFCHR, unix.S_IFIFO, unix.S_IFSOCK:
 	default:
 		return nil, errors.New("unsupported special file type")
-	}
-
-	st.Size = size
-	return dc.CreateStorageNodeFromStat(nil, addr, nil, st), nil
-}
-
-func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (*importNode, error) {
-	if !unix.S_ISREG(st.Mode) {
-		return nil, errors.New("must be called on regular file")
-	}
-
-	addr, size, err := dc.Storage.Cas.Insert(fdReader{FileDescriptor: fd})
-	if err != nil {
-		return nil, err
 	}
 
 	st.Size = size
@@ -128,53 +120,45 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 				return childNd, nil
 			}
 
+			flags := unix.O_PATH | unix.O_NOFOLLOW
+			if tp == unix.DT_REG || tp == unix.DT_DIR {
+				flags = unix.O_RDONLY | unix.O_NOFOLLOW
+			}
+			childFd, err := unix.Openat(fd, name, flags, 0)
+			if err != nil {
+				return nil, err
+			}
+
+			var childSt unix.Stat_t
+			err = unix.Fstat(childFd, &childSt)
+			if err != nil {
+				unix.Close(childFd)
+				return nil, err
+			}
+
 			var childNd *importNode
 			switch tp {
-			case unix.DT_FIFO, unix.DT_CHR, unix.DT_BLK, unix.DT_LNK, unix.DT_SOCK:
-				var childSt unix.Stat_t
-				err = unix.Fstatat(fd, name, &childSt, unix.AT_SYMLINK_NOFOLLOW)
-				if err != nil {
-					return nil, err
-				}
-
+			case unix.DT_FIFO, unix.DT_CHR, unix.DT_BLK, unix.DT_LNK, unix.DT_SOCK, unix.DT_REG:
 				childNd, err = cacheInode(&childSt, func() (*importNode, error) {
-					return dc.ImportSpecial(fd, name, &childSt)
+					return dc.ImportFile(childFd, &childSt)
 				})
 				if err != nil {
-					return nil, err
-				}
-			case unix.DT_REG, unix.DT_DIR:
-				childFd, err := unix.Openat(fd, name, unix.O_RDONLY, 0)
-				if err != nil {
-					return nil, err
-				}
-
-				var childSt unix.Stat_t
-				err = unix.Fstat(childFd, &childSt)
-				if err != nil {
 					unix.Close(childFd)
 					return nil, err
 				}
-
-				if tp == unix.DT_DIR {
-					childNd, err = dc.ImportDirectory(importDepth+1, importPath+"/"+name, childFd, &childSt)
-				} else { // tp == unix.DT_REG
-					childNd, err = cacheInode(&childSt, func() (*importNode, error) {
-						return dc.ImportFile(childFd, &childSt)
-					})
-				}
-
+			case unix.DT_DIR:
+				childNd, err = dc.ImportDirectory(importDepth+1, importPath+"/"+name, childFd, &childSt)
 				if err != nil {
 					unix.Close(childFd)
-					return nil, err
-				}
-
-				err = unix.Close(childFd)
-				if err != nil {
 					return nil, err
 				}
 			default:
 				return nil, errors.New("unexpected file type returned")
+			}
+
+			err = unix.Close(childFd)
+			if err != nil {
+				return nil, err
 			}
 
 			children[name] = childNd
