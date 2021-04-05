@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path"
 
+	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/castore"
 	"github.com/msg555/ctrfs/unix"
@@ -23,6 +24,7 @@ type InodeId = btree.IndexType
 type StorageContext struct {
 	Cas         *castore.Castore
 	HashFactory castore.HashFactory
+	BlockFile   blockfile.BlockFile
 	DirentTree  btree.BTree
 	NodeDB      *bolt.DB
 	BasePath    string
@@ -39,7 +41,7 @@ func OpenDefaultStorageContext() (*StorageContext, error) {
 		log.Fatal(err)
 	}
 
-	return OpenStorageContext(path.Join(usr.HomeDir, ".castore"))
+	return OpenStorageContext(path.Join(usr.HomeDir, ".ctrfs"))
 }
 
 func OpenStorageContext(basePath string) (*StorageContext, error) {
@@ -68,6 +70,9 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 		Cas:         cas,
 		NodeDB:      nodeDB,
 		BasePath:    basePath,
+		BlockFile: blockfile.BlockFile{
+			BlockSize: 4096,
+		},
 		DirentTree: btree.BTree{
 			MaxKeySize:   unix.NAME_MAX,
 			EntrySize:    INODE_SIZE,
@@ -76,8 +81,13 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 		},
 	}
 
-	// Choose a fan out to ensure block is under 4KB
-	err = sc.DirentTree.Open(path.Join(basePath, "dirent.bin"), 0666)
+	err = sc.BlockFile.Open(path.Join(basePath, "blocks.bin"), 0666, false)
+	if err != nil {
+		sc.Close()
+		return nil, err
+	}
+
+	err = sc.DirentTree.Open(&sc.BlockFile)
 	if err != nil {
 		sc.Close()
 		return nil, err
@@ -87,7 +97,7 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 }
 
 func (sc *StorageContext) Close() error {
-	err := sc.DirentTree.Close()
+	err := sc.BlockFile.Close()
 	if err != nil {
 		return err
 	}
