@@ -8,12 +8,11 @@
 package btree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
-	"sort"
-	"strings"
 
 	"github.com/go-errors/errors"
 
@@ -22,11 +21,10 @@ import (
 
 var bo = binary.LittleEndian
 
-const ALIGNMENT = 128
-
-type KeyType = string
+type KeyType = []byte
 type ValueType = []byte
 type IndexType = uint64
+type TreeIndex = uint64
 
 type KeyValuePair struct {
 	Key   KeyType
@@ -43,109 +41,610 @@ type BTree struct {
 	EntrySize int
 
 	// The number of keys stored at each B-tree node. Each node has up to FanOut+1
-	// child nodes.
+	// child nodes. FanOut must be set to an even number.
 	FanOut int
+
+	// The maximum depth this tree can be forked. In practice this will be 2 when
+	// used in ctrfs.
+	MaxForkDepth int
 
 	// Number of bytes in total for an entry
 	nodeSize int
 
 	// Underlying block store to keep b-tree nodes
-	blocks blockfile.BlockFile
+	blocks    []*blockfile.BlockFile
+	forkDepth int
 }
 
-func (tr *BTree) Open(path string, perm os.FileMode, maxKeySize, entrySize, fanOut int, readOnly bool) error {
-	nodeSize := 4 + maxKeySize + entrySize
-	blockSize := 8*(fanOut+1) + nodeSize*fanOut
-	tr.blocks.BlockSize = blockSize
-	err := tr.blocks.Open(path, perm, readOnly)
+/*
+Block:
+	A macro-node in a B-tree containing up to FanOut "nodes"
+Node:
+	A single key/value entry stored within a block
+
+Block Layout
+	nodes  uint32
+	height uint32 - leaf nodes have height=0
+
+	... 0 <= i <= tr.FanOut
+	child[i] uint64
+
+	... 0 <= i < tr.FanOut (set only for i < nodes)
+	keylen[i] uint32
+	key[i]    [MaxKeySize]byte
+	value[i]  [EntrySize]byte
+*/
+
+func dupBytes(arr []byte) []byte {
+	result := make([]byte, len(arr))
+	copy(result, arr)
+	return result
+}
+
+// Open a B-tree with a single writable block allocator.
+func (tr *BTree) Open(path string, perm os.FileMode) error {
+	if tr.FanOut%2 == 1 {
+		return errors.New("tree fan out must be even")
+	}
+
+	nodeSize := 4 + tr.MaxKeySize + tr.EntrySize
+
+	bf := blockfile.BlockFile{
+		BlockSize: 4 + 8*(tr.FanOut+1) + nodeSize*tr.FanOut,
+	}
+	err := bf.Open(path, perm, false)
 	if err != nil {
 		return err
 	}
 
 	tr.nodeSize = nodeSize
-	tr.MaxKeySize = maxKeySize
-	tr.EntrySize = entrySize
-	tr.FanOut = fanOut
+	tr.blocks = []*blockfile.BlockFile{&bf}
+	tr.forkDepth = 0
 	return nil
 }
 
-func (tr *BTree) Close() error {
-	return tr.blocks.Close()
+// Forks a B-tree to create a new tree where writes are written only to a new
+// separate block file. This forked tree's lifetime must be shorter than its
+// parent as it relies on resources owned and managed by the parent tree.
+func (tr *BTree) ForkFrom(parent *BTree, path string, perm os.FileMode) error {
+	if len(parent.blocks)+1 >= parent.MaxForkDepth {
+		return errors.New("parent already at maximum fork depth")
+	}
+
+	bf := blockfile.BlockFile{
+		BlockSize: parent.blocks[0].BlockSize,
+	}
+	err := bf.Open(path, perm, false)
+	if err != nil {
+		return err
+	}
+
+	tr.MaxKeySize = parent.MaxKeySize
+	tr.EntrySize = parent.EntrySize
+	tr.FanOut = parent.FanOut
+	tr.MaxForkDepth = parent.MaxForkDepth
+
+	tr.blocks = make([]*blockfile.BlockFile, len(parent.blocks)+1)
+	copy(tr.blocks, parent.blocks)
+	tr.blocks[len(parent.blocks)] = &bf
+
+	tr.nodeSize = parent.nodeSize
+
+	return nil
 }
 
-func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex, error) {
-	size := len(data)
-	if size == 0 {
-		return 0, nil
+// Close resources directly managed by this B-tree. Note that upon closing a
+// B-tree all forked child B-trees will no longer be usable and should also be
+// closed.
+func (tr *BTree) Close() error {
+	if tr.blocks != nil {
+		return tr.blocks[len(tr.blocks)-1].Close()
+	}
+	return nil
+}
+
+func (tr *BTree) validateKeyValue(key KeyType, value ValueType) error {
+	if len(key) == 0 {
+		return errors.New("key length too small")
+	}
+	if len(key) > tr.MaxKeySize {
+		return errors.New("key length too long")
+	}
+	if len(value) != tr.EntrySize {
+		return errors.New("value size incorrect")
+	}
+	return nil
+}
+
+func (tr *BTree) readBlock(index TreeIndex, buf []byte) ([]byte, error) {
+	blockIndex := index / TreeIndex(tr.MaxForkDepth)
+	blockForkDepth := index % TreeIndex(tr.MaxForkDepth)
+	if blockForkDepth >= TreeIndex(len(tr.blocks)) {
+		return nil, errors.New("invalid fork depth for current tree")
+	}
+	return tr.blocks[blockForkDepth].Read(blockIndex, buf)
+}
+
+func (tr *BTree) freeBlock(treeIndex TreeIndex) error {
+	blockIndex := treeIndex / TreeIndex(tr.MaxForkDepth)
+	blockForkDepth := treeIndex % TreeIndex(tr.MaxForkDepth)
+	if blockForkDepth+1 == TreeIndex(len(tr.blocks)) {
+		return tr.blocks[blockForkDepth].Free(blockIndex)
+	}
+	return nil
+}
+
+func (tr *BTree) newBlock(block []byte) (TreeIndex, error) {
+	newIndex, err := tr.blocks[len(tr.blocks)-1].Allocate()
+	if err != nil {
+		return 0, err
+	}
+	err = tr.blocks[len(tr.blocks)-1].Write(newIndex, block)
+	if err != nil {
+		return 0, err
+	}
+	return newIndex*TreeIndex(tr.MaxForkDepth) + TreeIndex(len(tr.blocks)-1), nil
+}
+
+func (tr *BTree) copyUpBlock(index TreeIndex, block []byte) (TreeIndex, error) {
+	if tr.getBlockSize(block) == 0 {
+		return 0, errors.New("cannot save block with size 0")
+	}
+	blockForkDepth := index % TreeIndex(tr.MaxForkDepth)
+	if blockForkDepth+1 == TreeIndex(len(tr.blocks)) {
+		blockIndex := index / TreeIndex(tr.MaxForkDepth)
+		if err := tr.blocks[blockForkDepth].Write(blockIndex, block); err != nil {
+			return 0, err
+		}
+		return index, nil
+	}
+	return tr.newBlock(block)
+}
+
+func (tr *BTree) getBlockSize(block []byte) int {
+	return int(bo.Uint32(block))
+}
+
+func (tr *BTree) setBlockSize(block []byte, size int) {
+	bo.PutUint32(block, uint32(size))
+}
+
+func (tr *BTree) getBlockChild(block []byte, childInd int) TreeIndex {
+	if childInd < 0 || childInd > tr.FanOut {
+		panic("child index out of range")
+	}
+	return bo.Uint64(block[4+8*childInd:])
+}
+
+func (tr *BTree) setBlockChild(block []byte, childInd int, childTr TreeIndex) {
+	if childInd < 0 || childInd > tr.FanOut {
+		panic("child index out of range")
+	}
+	bo.PutUint64(block[4+8*childInd:], childTr)
+}
+
+func (tr *BTree) getNodeSlice(block []byte, i int) []byte {
+	posStart := 4 + 8*(tr.FanOut+1) + i*tr.nodeSize
+	return block[posStart : posStart+tr.nodeSize]
+}
+
+func (tr *BTree) getNodeKey(node []byte) KeyType {
+	keylen := int(bo.Uint32(node))
+	if keylen > tr.MaxKeySize {
+		return nil
+	}
+	return node[4 : 4+keylen]
+}
+
+func (tr *BTree) getNodeValue(node []byte) ValueType {
+	return node[4+tr.MaxKeySize : tr.nodeSize]
+}
+
+func (tr *BTree) setNode(node []byte, key KeyType, value ValueType) {
+	bo.PutUint32(node, uint32(len(key)))
+	copy(node[4:], key)
+	copy(node[4+tr.MaxKeySize:], value)
+}
+
+func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
+	lo := 0
+	hi := tr.getBlockSize(block) - 1
+	if hi < 0 || hi >= tr.FanOut {
+		return 0, false, errors.New("unexpected block size")
+	}
+	for {
+		md := lo + (hi-lo)/2
+		nodeData := tr.getNodeSlice(block, md)
+
+		nodeKey := tr.getNodeKey(nodeData)
+		if len(key) == 0 {
+			return 0, false, errors.New("unexpected key")
+		}
+
+		cmp := bytes.Compare(key, nodeKey)
+		if cmp == 0 {
+			return md, true, nil
+		} else if cmp == -1 {
+			hi = md - 1
+		} else {
+			lo = md + 1
+		}
+		if hi < lo {
+			if cmp > 0 {
+				md++
+			}
+			return md, false, nil
+		}
+	}
+}
+
+func (tr *BTree) Insert(treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) (TreeIndex, error) {
+	err := tr.validateKeyValue(key, value)
+	if err != nil {
+		return 0, err
 	}
 
-	type KVPair struct {
-		Key   KeyType
-		Value ValueType
+	var tr1 TreeIndex
+	var tr2 TreeIndex
+
+	if treeIndex != 0 {
+		tr1, tr2, key, value, err = tr.insertHelper(treeIndex, key, value, overwrite)
+		if err != nil {
+			return 0, err
+		}
+		if tr2 == 0 {
+			return tr1, nil
+		}
 	}
 
-	i := 0
-	sortedData := make([]KVPair, len(data))
+	// Need to create new root node.
+	block := make([]byte, tr.blocks[0].BlockSize)
+	tr.setBlockSize(block, 1)
+	tr.setBlockChild(block, 0, tr1)
+	tr.setBlockChild(block, 1, tr2)
+	tr.setNode(tr.getNodeSlice(block, 0), key, value)
+
+	treeIndex, err = tr.newBlock(block)
+	if err != nil {
+		return 0, err
+	}
+	return treeIndex, nil
+}
+
+func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) (TreeIndex, TreeIndex, KeyType, ValueType, error) {
+	block, err := tr.readBlock(treeIndex, nil)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	insertInd, match, err := tr.searchBlock(block, key)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	// Handle case where there's an exact key match.
+	if match {
+		if !overwrite {
+			return 0, 0, nil, nil, errors.New("entry already exists")
+		}
+
+		tr.setNode(tr.getNodeSlice(block, insertInd), key, value)
+		treeIndex, err = tr.copyUpBlock(treeIndex, block)
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+
+		return treeIndex, 0, nil, nil, nil
+	}
+
+	var tr1 TreeIndex
+	var tr2 TreeIndex
+
+	// Continue inserting down the tree if needed.
+	childTree := tr.getBlockChild(block, insertInd)
+	if childTree != 0 {
+		tr1, tr2, key, value, err = tr.insertHelper(childTree, key, value, overwrite)
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+
+		if tr2 == 0 {
+			// Insert into child was clean
+			tr.setBlockChild(block, insertInd, tr1)
+
+			treeIndex, err = tr.copyUpBlock(treeIndex, block)
+			if err != nil {
+				return 0, 0, nil, nil, err
+			}
+			return treeIndex, 0, nil, nil, err
+		}
+	}
+
+	// We have to insert new node (key, value) with children (tr1, tr2)
+	blockSize := tr.getBlockSize(block)
+	if blockSize < tr.FanOut {
+		// We have room for the new child directly in our block.
+
+		// Shift over our child pointers
+		for i := blockSize; i >= insertInd+1; i-- {
+			tr.setBlockChild(block, i+1, tr.getBlockChild(block, i))
+		}
+		tr.setBlockChild(block, insertInd+1, tr2)
+		tr.setBlockChild(block, insertInd, tr1)
+
+		// Shift over our node data
+		for i := blockSize - 1; i >= insertInd; i-- {
+			copy(tr.getNodeSlice(block, i+1), tr.getNodeSlice(block, i))
+		}
+		tr.setNode(tr.getNodeSlice(block, insertInd), key, value)
+
+		tr.setBlockSize(block, blockSize+1)
+
+		treeIndex, err = tr.copyUpBlock(treeIndex, block)
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		return treeIndex, 0, nil, nil, nil
+	}
+
+	// List out the children and nodes in order
+	var childTrees []TreeIndex
+	var nodeKeys []KeyType
+	var nodeValues []ValueType
+	for i := 0; i <= blockSize; i++ {
+		if i == insertInd {
+			childTrees = append(childTrees, tr1)
+			childTrees = append(childTrees, tr2)
+			nodeKeys = append(nodeKeys, key)
+			nodeValues = append(nodeValues, value)
+		} else {
+			childTrees = append(childTrees, tr.getBlockChild(block, i))
+		}
+		if i < blockSize {
+			nodeKeys = append(nodeKeys, tr.getNodeKey(tr.getNodeSlice(block, i)))
+			nodeValues = append(nodeValues, tr.getNodeValue(tr.getNodeSlice(block, i)))
+		}
+	}
+
+	blockA := make([]byte, tr.blocks[0].BlockSize)
+	blockB := make([]byte, tr.blocks[0].BlockSize)
+
+	newBlockSize := tr.FanOut / 2
+	tr.setBlockSize(blockA, newBlockSize)
+	tr.setBlockSize(blockB, newBlockSize)
+
+	for i := 0; i <= newBlockSize; i++ {
+		tr.setBlockChild(blockA, i, childTrees[i])
+		tr.setBlockChild(blockB, i, childTrees[newBlockSize+i+1])
+		if i < newBlockSize {
+			tr.setNode(tr.getNodeSlice(blockA, i), nodeKeys[i], nodeValues[i])
+			tr.setNode(tr.getNodeSlice(blockB, i), nodeKeys[newBlockSize+i+1], nodeValues[newBlockSize+i+1])
+		}
+	}
+
+	// Otherwise we will have to split our own node as well
+	treeIndexA, err := tr.copyUpBlock(treeIndex, blockA)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	treeIndexB, err := tr.newBlock(blockB)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	return treeIndexA, treeIndexB, nodeKeys[newBlockSize], nodeValues[newBlockSize], nil
+}
+
+func (tr *BTree) WriteRecords(data map[string]ValueType) (TreeIndex, error) {
+	treeNode := TreeIndex(0)
 	for key, value := range data {
-		if len(key) > int(tr.MaxKeySize) {
-			return 0, errors.New("key length too long")
-		}
-		if len(value) != int(tr.EntrySize) {
-			return 0, errors.New("value wrong length")
-		}
-		sortedData[i] = KVPair{
-			Key:   key,
-			Value: value,
-		}
-		i++
-	}
-	sort.Slice(sortedData, func(i, j int) bool {
-		return sortedData[i].Key < sortedData[j].Key
-	})
-
-	var err error
-	blocks := make([]blockfile.BlockIndex, (size+tr.FanOut-1)/tr.FanOut)
-	for i = 0; i < len(blocks); i++ {
-		blocks[i], err = tr.blocks.Allocate()
+		var err error
+		treeNode, err = tr.Insert(treeNode, KeyType(key), value, false)
 		if err != nil {
 			return 0, err
 		}
 	}
+	return treeNode, nil
+}
 
-	nextChild := 1
-	idxer := createIndexer(tr.FanOut, size)
-	buf := make([]byte, tr.blocks.BlockSize)
-	for i = 0; i < len(blocks); i++ {
-		// Zero buffer
-		for j := range buf {
-			buf[j] = 0
-		}
+func (tr *BTree) Delete(treeIndex TreeIndex, key KeyType) (TreeIndex, error) {
+	if key == nil {
+		return 0, errors.New("key cannot be nil")
+	}
 
-		// Write child block indexes
-		for j := 0; j <= tr.FanOut && nextChild < len(blocks); j++ {
-			bo.PutUint64(buf[j*8:], blocks[nextChild])
-			nextChild++
-		}
-		recordBuf := buf[8*(tr.FanOut+1):]
+	block, _, _, err := tr.deleteHelper(treeIndex, key)
+	if err != nil {
+		return 0, err
+	}
 
-		// Write node data
-		for j := i * tr.FanOut; j < (i+1)*tr.FanOut && j < size; j++ {
-			si := idxer.sortIndex(j)
-			kvPair := sortedData[si]
-
-			bo.PutUint32(recordBuf, uint32(len(kvPair.Key)))
-			copy(recordBuf[4:], kvPair.Key)
-			copy(recordBuf[4+tr.MaxKeySize:], kvPair.Value)
-			recordBuf = recordBuf[tr.nodeSize:]
-		}
-
-		err = tr.blocks.Write(blocks[i], buf)
-		if err != nil {
+	if tr.getBlockSize(block) == 0 {
+		// Root has emptied out, delete root node
+		if err := tr.freeBlock(treeIndex); err != nil {
 			return 0, err
+		}
+		return tr.getBlockChild(block, 0), nil
+	}
+
+	return tr.copyUpBlock(treeIndex, block)
+}
+
+func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType, ValueType, error) {
+	// TODO: probably can avoid some copyUp invocations if nothing changed
+	block, err := tr.readBlock(treeIndex, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	var insertInd int
+	var match bool
+	if key == nil {
+		// nil key means we want to delete max element
+		insertInd = tr.getBlockSize(block)
+		if tr.getBlockChild(block, insertInd) == 0 {
+			insertInd--
+			match = true
+		}
+	} else {
+		insertInd, match, err = tr.searchBlock(block, key)
+		if err != nil {
+			return nil, nil, nil, err
 		}
 	}
 
-	return blocks[0], nil
+	childTree := tr.getBlockChild(block, insertInd)
+	var childBlock []byte
+	var deletedKey KeyType
+	var deletedValue ValueType
+
+	blockSize := tr.getBlockSize(block)
+	if match {
+		if childTree == 0 {
+			if key == nil {
+				// we only need to copy the deleted key/value if we were doing a deleted
+				// max operation.
+				deletedKey = dupBytes(tr.getNodeKey(tr.getNodeSlice(block, insertInd)))
+				deletedValue = dupBytes(tr.getNodeValue(tr.getNodeSlice(block, insertInd)))
+			}
+
+			// Shift over elements on top of deleted element, no children to shift.
+			for i := insertInd; i+1 < blockSize; i++ {
+				copy(tr.getNodeSlice(block, i), tr.getNodeSlice(block, i+1))
+			}
+			tr.setBlockSize(block, blockSize-1)
+
+			return block, deletedKey, deletedValue, nil
+		}
+
+		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(childTree, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		tr.setNode(tr.getNodeSlice(block, insertInd), deletedKey, deletedValue)
+	} else {
+		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(childTree, key)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	childBlockSize := tr.getBlockSize(childBlock)
+	if childBlockSize*2 >= tr.FanOut {
+		// Child size is fine
+		childTree, err := tr.copyUpBlock(childTree, childBlock)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		tr.setBlockChild(block, insertInd, childTree)
+		return block, deletedKey, deletedValue, nil
+	}
+
+	// Child is too small, match up with sibling
+	sibIndex := insertInd - 1
+	if sibIndex < 0 {
+		sibIndex = insertInd + 1
+	}
+	sibTree := tr.getBlockChild(block, sibIndex)
+	sibBlock, err := tr.readBlock(sibTree, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	sibBlockSize := tr.getBlockSize(sibBlock)
+
+	// Normalize so that childX refers to the larger sibling
+	if insertInd < sibIndex {
+		sibIndex, insertInd = insertInd, sibIndex
+		sibBlock, childBlock = childBlock, sibBlock
+		sibTree, childTree = childTree, sibTree
+		sibBlockSize, childBlockSize = childBlockSize, sibBlockSize
+	}
+
+	if childBlockSize+sibBlockSize >= tr.FanOut {
+		// Rebalance nodes with sibling block
+		var childTrees []TreeIndex
+		var nodeKeys []KeyType
+		var nodeValues []ValueType
+		for i := 0; i <= sibBlockSize; i++ {
+			childTrees = append(childTrees, tr.getBlockChild(sibBlock, i))
+			if i < sibBlockSize {
+				nodeKeys = append(nodeKeys, tr.getNodeKey(tr.getNodeSlice(sibBlock, i)))
+				nodeValues = append(nodeValues, tr.getNodeValue(tr.getNodeSlice(sibBlock, i)))
+			}
+		}
+		nodeKeys = append(nodeKeys, tr.getNodeKey(tr.getNodeSlice(block, sibIndex)))
+		nodeValues = append(nodeValues, tr.getNodeValue(tr.getNodeSlice(block, sibIndex)))
+		for i := 0; i <= childBlockSize; i++ {
+			childTrees = append(childTrees, tr.getBlockChild(childBlock, i))
+			if i < childBlockSize {
+				nodeKeys = append(nodeKeys, tr.getNodeKey(tr.getNodeSlice(childBlock, i)))
+				nodeValues = append(nodeValues, tr.getNodeValue(tr.getNodeSlice(childBlock, i)))
+			}
+		}
+
+		// Calculate new block sizes
+		sibBlockSize = (len(nodeKeys) - 1) / 2
+		childBlockSize = len(nodeKeys) - 1 - sibBlockSize
+
+		// Copy values back into blocks
+		sibBlock = make([]byte, tr.blocks[0].BlockSize)
+		tr.setBlockSize(sibBlock, sibBlockSize)
+		for i := 0; i <= sibBlockSize; i++ {
+			tr.setBlockChild(sibBlock, i, childTrees[i])
+			if i < sibBlockSize {
+				tr.setNode(tr.getNodeSlice(sibBlock, i), nodeKeys[i], nodeValues[i])
+			}
+		}
+
+		childBlock = make([]byte, tr.blocks[0].BlockSize)
+		tr.setBlockSize(childBlock, childBlockSize)
+		for i := 0; i <= childBlockSize; i++ {
+			tr.setBlockChild(childBlock, i, childTrees[sibBlockSize+1+i])
+			if i < childBlockSize {
+				tr.setNode(tr.getNodeSlice(childBlock, i), nodeKeys[sibBlockSize+1+i], nodeValues[sibBlockSize+1+i])
+			}
+		}
+
+		sibTree, err = tr.copyUpBlock(sibTree, sibBlock)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		childTree, err = tr.copyUpBlock(childTree, childBlock)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		tr.setNode(tr.getNodeSlice(block, sibIndex), nodeKeys[sibBlockSize], nodeValues[sibBlockSize])
+		tr.setBlockChild(block, sibIndex, sibTree)
+		tr.setBlockChild(block, sibIndex+1, childTree)
+
+		return block, deletedKey, deletedValue, nil
+	}
+
+	// Merge with sibling block
+	copy(tr.getNodeSlice(sibBlock, sibBlockSize), tr.getNodeSlice(block, sibIndex))
+	for i := 0; i <= childBlockSize; i++ {
+		tr.setBlockChild(sibBlock, sibBlockSize+1+i, tr.getBlockChild(childBlock, i))
+		if i < childBlockSize {
+			copy(tr.getNodeSlice(sibBlock, sibBlockSize+1+i), tr.getNodeSlice(childBlock, i))
+		}
+	}
+	tr.setBlockSize(sibBlock, sibBlockSize+childBlockSize+1)
+
+	sibTree, err = tr.copyUpBlock(sibTree, sibBlock)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	for i := sibIndex; i+1 < blockSize; i++ {
+		tr.setBlockChild(block, i+1, tr.getBlockChild(block, i+2))
+		copy(tr.getNodeSlice(block, i), tr.getNodeSlice(block, i+1))
+	}
+	tr.setBlockSize(block, blockSize-1)
+
+	return block, deletedKey, deletedValue, nil
 }
 
 // Start scanning entries at the given offset (pass 0 to start at the beginning).
@@ -157,31 +656,30 @@ func (tr *BTree) WriteRecords(data map[KeyType]ValueType) (blockfile.BlockIndex,
 // it will return an opaque offset that can be passed back to Scan() to resume
 // the scan starting with the record that entryCallback returned false on.
 // Scan() will return true if the scan has reached the end of the btree.
-func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallback func(offset uint64, index IndexType, key KeyType, value ValueType) bool) (bool, error) {
-	if nodeIndex == 0 {
+func (tr *BTree) Scan(treeIndex TreeIndex, offset uint64, entryCallback func(offset uint64, index IndexType, key KeyType, value ValueType) bool) (bool, error) {
+	if treeIndex == 0 {
 		return true, nil
 	}
 
 	var stackBlocks [][]byte
-	var stackBlockIndexes []blockfile.BlockIndex
+	var stackBlockIndexes []TreeIndex
 	var stackIndexes []int
 	for {
-		block := make([]byte, tr.blocks.BlockSize)
-		_, err := tr.blocks.Read(nodeIndex, block)
+		block, err := tr.readBlock(treeIndex, nil)
 		if err != nil {
 			return false, err
 		}
 
 		childIndex := offset % uint64(tr.FanOut+1)
 		stackBlocks = append(stackBlocks, block)
-		stackBlockIndexes = append(stackBlockIndexes, nodeIndex)
+		stackBlockIndexes = append(stackBlockIndexes, treeIndex)
 		stackIndexes = append(stackIndexes, int(childIndex))
 		if offset <= uint64(tr.FanOut) {
 			break
 		}
 
 		offset /= uint64(tr.FanOut + 1)
-		nodeIndex = blockfile.BlockIndex(bo.Uint32(block[8*childIndex:]))
+		treeIndex = tr.getBlockChild(block, int(childIndex))
 	}
 
 	moveUp := true
@@ -193,13 +691,12 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 	for {
 		if moveUp {
 			for {
-				childIndex := bo.Uint64(stackBlocks[stackDepth][8*stackIndexes[stackDepth]:])
+				childIndex := tr.getBlockChild(stackBlocks[stackDepth], stackIndexes[stackDepth])
 				if childIndex == 0 {
 					break
 				}
 
-				block := make([]byte, tr.blocks.BlockSize)
-				_, err := tr.blocks.Read(childIndex, block)
+				block, err := tr.readBlock(childIndex, nil)
 				if err != nil {
 					return false, err
 				}
@@ -218,7 +715,7 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 			}
 			block := stackBlocks[stackDepth]
 			index := stackIndexes[stackDepth]
-			if index == tr.FanOut || bo.Uint64(block[8*(tr.FanOut+1)+index*tr.nodeSize:]) == 0 {
+			if index == tr.getBlockSize(block) {
 				stackDepth--
 			} else {
 				break
@@ -232,18 +729,20 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 		block := stackBlocks[stackDepth]
 		blockIndex := stackBlockIndexes[stackDepth]
 		index := stackIndexes[stackDepth]
-		nodeData := block[8*(tr.FanOut+1)+index*tr.nodeSize:]
+		nodeData := tr.getNodeSlice(block, index)
 
-		keylen := int(bo.Uint32(nodeData))
-		if keylen > tr.MaxKeySize {
-			return false, errors.New("unexpected long key length")
+		key := tr.getNodeKey(nodeData)
+		if len(key) == 0 {
+			return false, errors.New("unexpected key")
 		}
+
+		value := tr.getNodeValue(nodeData)
 
 		offset = uint64(index + 1)
 		for i := stackDepth - 1; i >= 0; i-- {
 			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
 		}
-		if !entryCallback(offset, blockIndex*uint64(tr.FanOut)+uint64(index), string(nodeData[4:4+keylen]), nodeData[4+tr.MaxKeySize:4+tr.MaxKeySize+tr.EntrySize]) {
+		if !entryCallback(offset, blockIndex*uint64(tr.FanOut)+uint64(index), key, value) {
 			return false, nil
 		}
 
@@ -251,171 +750,106 @@ func (tr *BTree) Scan(nodeIndex blockfile.BlockIndex, offset uint64, entryCallba
 	}
 }
 
-func (tr *BTree) Find(nodeIndex blockfile.BlockIndex, key KeyType) (ValueType, IndexType, error) {
-	// Index 0 means block doesn't exist
-	block := make([]byte, tr.blocks.BlockSize)
+func (tr *BTree) Find(treeIndex TreeIndex, key KeyType) (ValueType, IndexType, error) {
+	for {
+		for treeIndex == 0 {
+			return nil, 0, nil
+		}
 
-	for nodeIndex != 0 {
-		_, err := tr.blocks.Read(nodeIndex, block)
+		block, err := tr.readBlock(treeIndex, nil)
 		if err != nil {
 			return nil, 0, err
 		}
 
-		lo := 0
-		hi := tr.FanOut - 1
-		for {
-			md := lo + (hi-lo)/2
-			nodeData := block[8*(tr.FanOut+1)+md*tr.nodeSize:]
-
-			keylen := int(bo.Uint32(nodeData))
-			if keylen > tr.MaxKeySize {
-				return nil, 0, errors.New("unexpected long key length")
-			}
-			if keylen == 0 {
-				hi = md - 1
-				if hi < lo {
-					nodeIndex = bo.Uint64(block[8*md:])
-					break
-				}
-				continue
-			}
-
-			cmp := strings.Compare(key, string(nodeData[4:4+keylen]))
-			if cmp == 0 {
-				// copy this?
-				return nodeData[4+tr.MaxKeySize : 4+tr.MaxKeySize+tr.EntrySize], nodeIndex*uint64(tr.FanOut) + uint64(md), nil
-			} else if cmp == -1 {
-				hi = md - 1
-			} else {
-				lo = md + 1
-			}
-			if hi < lo {
-				if cmp == 1 {
-					md++
-				}
-				nodeIndex = bo.Uint64(block[8*md:])
-				break
-			}
+		insertInd, match, err := tr.searchBlock(block, key)
+		if err != nil {
+			return nil, 0, err
 		}
-	}
 
-	return nil, 0, nil
+		if match {
+			return tr.getNodeValue(tr.getNodeSlice(block, insertInd)), treeIndex*uint64(tr.FanOut) + uint64(insertInd), nil
+		}
+
+		treeIndex = tr.getBlockChild(block, insertInd)
+	}
 }
 
 func (tr *BTree) ByIndex(index IndexType) (ValueType, error) {
-	nodeIndex := blockfile.BlockIndex(index / uint64(tr.FanOut))
+	treeIndex := TreeIndex(index / uint64(tr.FanOut))
 	pos := int(index % uint64(tr.FanOut))
-	return tr.blocks.ReadAt(nodeIndex, 8*(tr.FanOut+1)+pos*tr.nodeSize+4+tr.MaxKeySize, tr.EntrySize, nil)
-}
 
-type treeIndexer struct {
-	fanOut       int
-	size         int
-	depthSizes   []int
-	maxDepth     int
-	lastDeepNode int
-}
-
-func createIndexer(fanOut int, size int) treeIndexer {
-	idx := treeIndexer{
-		fanOut:     fanOut,
-		size:       size,
-		depthSizes: []int{0},
+	block, err := tr.readBlock(treeIndex, nil)
+	if err != nil {
+		return nil, err
 	}
-
-	for idx.depthSizes[idx.maxDepth] < idx.size {
-		idx.depthSizes = append(idx.depthSizes, idx.depthSizes[idx.maxDepth]*(idx.fanOut+1)+idx.fanOut)
-		idx.maxDepth++
-	}
-
-	idx.lastDeepNode = idx.size - idx.depthSizes[idx.maxDepth-1] - 1
-	idx.lastDeepNode += idx.lastDeepNode / idx.fanOut
-	return idx
-}
-
-// Converts a sort index into a node index within the btree.
-func (idx treeIndexer) nodeIndex(sortIndex int) int {
-	var level int
-	if sortIndex <= idx.lastDeepNode {
-		level = idx.maxDepth
-	} else {
-		level = idx.maxDepth - 1
-		sortIndex = sortIndex - idx.lastDeepNode - 1 + idx.lastDeepNode/(idx.fanOut+1)
-	}
-
-	for (sortIndex+1)%(idx.fanOut+1) == 0 {
-		level--
-		sortIndex /= idx.fanOut + 1
-	}
-
-	return idx.depthSizes[level-1] + sortIndex - sortIndex/(idx.fanOut+1)
-}
-
-// Converts a node index into a sort index within the btree.
-func (idx treeIndexer) sortIndex(nodeIndex int) int {
-	level := 0
-	for idx.depthSizes[level] <= nodeIndex {
-		level++
-	}
-	levelPos := nodeIndex - idx.depthSizes[level-1]
-	levelPos += levelPos / idx.fanOut
-
-	for i := level; i+1 < idx.maxDepth; i++ {
-		levelPos = (levelPos+1)*(idx.fanOut+1) - 1
-	}
-	if level != idx.maxDepth {
-		lastDepth := idx.size - idx.depthSizes[idx.maxDepth-1]
-
-		newPos := (levelPos+1)*(idx.fanOut+1) - 1
-
-		levelPos += lastDepth
-		if newPos < levelPos {
-			levelPos = newPos
-		}
-	}
-
-	return levelPos
+	return tr.getNodeValue(tr.getNodeSlice(block, pos)), nil
 }
 
 func main() {
-	tr := BTree{}
-	err := tr.Open("test.btree", 0666, 16, 16, 3, false)
+	tr := BTree{
+		MaxKeySize:   16,
+		EntrySize:    16,
+		FanOut:       4,
+		MaxForkDepth: 2,
+	}
+	err := tr.Open("test.btree", 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	size := 16
+	insertSize := 3200
 
-	data := make(map[string][]byte)
-	for i := 0; i < size; i++ {
-		data[fmt.Sprintf("wow-%d", i)] = []byte(fmt.Sprintf("%16d", i))
-	}
-
-	rootIndex, err := tr.WriteRecords(data)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for i := 0; i < size; i++ {
-		data, _, err := tr.Find(rootIndex, fmt.Sprintf("wow-%d", i))
+	rootIndex := TreeIndex(0)
+	for i := 0; i < insertSize; i++ {
+		rootIndex, err = tr.Insert(rootIndex, []byte(fmt.Sprintf("wow-%d", i)), []byte(fmt.Sprintf("%16d", i)), false)
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	for i := 0; i < insertSize/3; i++ {
+		key := []byte(fmt.Sprintf("wow-%d", i))
+		rootIndex, err = tr.Delete(rootIndex, key)
+		if err != nil {
+			gerr, ok := err.(*errors.Error)
+			if ok {
+				log.Fatalf("failed: %s\n%s", err, gerr.ErrorStack())
+			} else {
+				log.Fatalf("failed: %s", err)
+			}
+		}
+	}
+
+	for i := 0; i < insertSize; i++ {
+		key := []byte(fmt.Sprintf("wow-%d", i))
+		data, _, err := tr.Find(rootIndex, key)
+		if err != nil {
+			gerr, ok := err.(*errors.Error)
+			if ok {
+				log.Fatalf("failed: %s\n%s", err, gerr.ErrorStack())
+			} else {
+				log.Fatalf("failed: %s", err)
+			}
+		}
 
 		if data == nil {
-			log.Fatal("no data found")
+			log.Printf("NOT FOUND '%s'\n", string(key))
+			if i >= insertSize/3 {
+				panic("expected to find")
+			}
 		}
 	}
 
 	offset := uint64(0)
 	for {
 		cnt := 0
-		complete, err := tr.Scan(rootIndex, offset, func(off uint64, index IndexType, key string, val []byte) bool {
+		complete, err := tr.Scan(rootIndex, offset, func(off uint64, index IndexType, key []byte, val []byte) bool {
 			cnt++
 			if cnt > 1 {
 				offset = off
 				return false
 			}
+			fmt.Println(string(key), string(val))
 			return true
 		})
 		if err != nil {

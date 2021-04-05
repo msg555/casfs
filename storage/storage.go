@@ -14,7 +14,7 @@ import (
 	"github.com/boltdb/bolt"
 )
 
-const DIRENT_BTREE_FANOUT = 9
+const DIRENT_BTREE_FANOUT = 8
 const HASH_BYTE_LENGTH = 32
 const INODE_BUCKET_NAME = "inodes"
 
@@ -68,11 +68,16 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 		Cas:         cas,
 		NodeDB:      nodeDB,
 		BasePath:    basePath,
+		DirentTree: btree.BTree{
+			MaxKeySize:   unix.NAME_MAX,
+			EntrySize:    INODE_SIZE,
+			FanOut:       DIRENT_BTREE_FANOUT,
+			MaxForkDepth: 2,
+		},
 	}
 
 	// Choose a fan out to ensure block is under 4KB
-	err = sc.DirentTree.Open(path.Join(basePath, "dirent.bin"),
-		0666, unix.NAME_MAX, INODE_SIZE, DIRENT_BTREE_FANOUT, false)
+	err = sc.DirentTree.Open(path.Join(basePath, "dirent.bin"), 0666)
 	if err != nil {
 		sc.Close()
 		return nil, err
@@ -125,7 +130,7 @@ func (sc *StorageContext) ReadInode(nodeIndex InodeId) (*InodeData, error) {
 }
 
 func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, InodeId, error) {
-	data, childId, err := sc.DirentTree.Find(nd.TreeNode, name)
+	data, childId, err := sc.DirentTree.Find(nd.TreeNode, []byte(name))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -137,8 +142,8 @@ func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, I
 
 func (sc *StorageContext) ScanChildren(nd *InodeData, offset uint64,
 	direntCallback func(offset uint64, inodeId InodeId, name string, ent *InodeData) bool) (bool, error) {
-	return sc.DirentTree.Scan(nd.TreeNode, offset, func(offset uint64, index btree.IndexType, key string, val []byte) bool {
-		return direntCallback(offset, index, key, inodeFromBytes(val))
+	return sc.DirentTree.Scan(nd.TreeNode, offset, func(offset uint64, index btree.IndexType, key []byte, val []byte) bool {
+		return direntCallback(offset, index, string(key), inodeFromBytes(val))
 	})
 }
 

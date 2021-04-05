@@ -163,12 +163,18 @@ func (bf *BlockFile) Free(index BlockIndex) error {
 // Read an entire block into the passed buffer. If the buffer is not large
 // enough (or nil) a new array will be allocated and returned.
 func (bf *BlockFile) Read(index BlockIndex, buf []byte) ([]byte, error) {
+	if index == 0 {
+		return nil, errors.New("invalid block index")
+	}
 	return readAtFull(bf.file, uint64(index)*uint64(bf.internalBlockSize)+8, int(bf.BlockSize), buf)
 }
 
 // Read part of a block into the passed buffer. If the buffer is not large
 // enough (or nil) a new array will be allocated and returned.
 func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, error) {
+	if index == 0 {
+		return nil, errors.New("invalid block index")
+	}
 	if sz < 0 || sz > bf.BlockSize {
 		return nil, errors.New("invalid block size")
 	} else if off < 0 || off > bf.BlockSize-sz {
@@ -180,6 +186,9 @@ func (bf *BlockFile) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, 
 // Write an entire block to the block file. buf must be exactly bf.BlockSize in
 // length.
 func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
+	if index == 0 {
+		return errors.New("invalid block index")
+	}
 	if len(buf) != int(bf.BlockSize) {
 		return errors.New("can only make writes of size BlockSize")
 	}
@@ -188,6 +197,9 @@ func (bf *BlockFile) Write(index BlockIndex, buf []byte) error {
 
 // Write part of a block to the block file.
 func (bf *BlockFile) WriteAt(index BlockIndex, off int, buf []byte) error {
+	if index == 0 {
+		return errors.New("invalid block index")
+	}
 	if len(buf) > bf.BlockSize {
 		return errors.New("write data too large")
 	} else if off < 0 || off > bf.BlockSize-len(buf) {

@@ -169,7 +169,7 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 
 	if !ignoreHardlinks {
 		for childPath, childNd := range children {
-			_, edgeIdx, err := sc.DirentTree.Find(nd.Inode.TreeNode, childPath)
+			_, edgeIdx, err := sc.DirentTree.Find(nd.Inode.TreeNode, []byte(childPath))
 			if err != nil {
 				return err
 			}

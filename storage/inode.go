@@ -3,7 +3,7 @@ package storage
 import (
 	"encoding/binary"
 
-	"github.com/msg555/ctrfs/blockfile"
+	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
 )
 
@@ -11,8 +11,6 @@ const INODE_SIZE = 60 + 3*HASH_BYTE_LENGTH
 const MODE_HARDLINK_LAYER = uint32(0xFFFFFFFF)
 
 var bo = binary.LittleEndian
-
-type InodeIndex = blockfile.BlockIndex
 
 type InodeData struct {
 	Mode         uint32
@@ -23,7 +21,7 @@ type InodeData struct {
 	Mtim         uint64
 	Ctim         uint64
 	Size         uint64
-	TreeNode     blockfile.BlockIndex
+	TreeNode     btree.TreeIndex
 	PathHash     [HASH_BYTE_LENGTH]byte
 	Address      [HASH_BYTE_LENGTH]byte
 	XattrAddress [HASH_BYTE_LENGTH]byte
