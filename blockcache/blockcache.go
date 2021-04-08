@@ -266,6 +266,34 @@ func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc f
 	return err
 }
 
+func (c *BlockCache) Flush(groupKey interface{}, key interface{}) error {
+	val, _, err := c.lookup(groupKey, key, false)
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return nil
+	}
+
+	val.Lock.Lock()
+	defer val.Lock.Unlock()
+
+	if val.Dead {
+		return nil
+	}
+
+	groupFlushable := groupKey.(Flushable)
+	err = groupFlushable.FlushBlock(key, val.Buf)
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	c.dirtyList.Remove(val.DirtyElem)
+	val.DirtyElem = nil
+
+	return err
+}
+
 func (c *BlockCache) FlushGroup(groupKey interface{}) error {
 	var vals []*cacheVal
 

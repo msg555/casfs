@@ -166,4 +166,21 @@ func TestFlushFuzz(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	err := cache.Access(group, 0, true, func(buf []byte, created bool) (bool, error) {
+		bo.PutUint32(buf, uint32(0xFFFFFFFF))
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cache.Flush(group, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if group.Backing[0] != 0xFFFFFFFF {
+		t.Fatal("flush of individual element did not go to backing")
+	}
 }
