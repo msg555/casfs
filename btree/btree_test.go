@@ -56,7 +56,7 @@ func TestFuzz(t *testing.T) {
 	treeRoot := EMPTY_TREE_ROOT
 
 	data := make(map[string]string)
-	for i := 0; i < 10000000; i++ {
+	for i := 0; i < 100000; i++ {
 		k := fmt.Sprintf("%d", rng.Int()%keyDomain)
 		switch rng.Int() % 3 {
 		case 0: // Find
