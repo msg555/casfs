@@ -183,6 +183,9 @@ func (c *BlockCache) evict() error {
 				delete(submap, val.SubKey)
 			}
 		}
+		if len(submap) == 0 {
+			delete(c.groupMap, val.GroupKey)
+		}
 
 		// Remove from old list and dirty list.
 		c.oldList.Remove(val.OldElem)
@@ -252,7 +255,7 @@ func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc f
 		return err
 	}
 
-	modified, err := accessFunc(val.Buf, created)
+	modified, err := accessFunc(val.Buf, !created)
 	if modified {
 		// Mark element dirty
 		c.lock.Lock()
@@ -329,6 +332,65 @@ func (c *BlockCache) FlushGroup(groupKey interface{}) error {
 		c.lock.Lock()
 		c.dirtyList.Remove(val.DirtyElem)
 		val.DirtyElem = nil
+		c.lock.Unlock()
+
+		val.Lock.Unlock()
+	}
+
+	return nil
+}
+
+func (c *BlockCache) RemoveGroup(groupKey interface{}) error {
+	var vals []*cacheVal
+
+	c.lock.Lock()
+	submap, ok := c.groupMap[groupKey]
+	if ok {
+		vals = make([]*cacheVal, 0, len(submap))
+		for _, val := range submap {
+			vals = append(vals, val)
+		}
+	}
+	c.lock.Unlock()
+
+	groupFlushable := groupKey.(Flushable)
+	for _, val := range vals {
+		val.Lock.Lock()
+
+		if val.Dead || val.DirtyElem == nil {
+			val.Lock.Unlock()
+			continue
+		}
+
+		// Flush the element if dirty
+		err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+		if err != nil {
+			val.Lock.Unlock()
+			return err
+		}
+
+		// Remove from dirty list
+		c.lock.Lock()
+
+		val.Dead = true
+		if val.DirtyElem != nil {
+			c.dirtyList.Remove(val.DirtyElem)
+		}
+		c.oldList.Remove(val.OldElem)
+
+		// Delete from groupMap if still present (which it probably is unless
+		// someone accessed the same key again)
+		submap, ok := c.groupMap[val.GroupKey]
+		if ok {
+			curVal := submap[val.SubKey]
+			if curVal == val {
+				delete(submap, val.SubKey)
+			}
+		}
+		if len(submap) == 0 {
+			delete(c.groupMap, val.GroupKey)
+		}
+
 		c.lock.Unlock()
 
 		val.Lock.Unlock()

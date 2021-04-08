@@ -67,13 +67,13 @@ func (nd *InodeData) Read(buf []byte) {
 	copy(nd.XattrAddress[:], buf[60+2*HASH_BYTE_LENGTH:])
 }
 
-func (nd *InodeData) toBytes() []byte {
+func (nd *InodeData) ToBytes() []byte {
 	var buf [INODE_SIZE]byte
 	nd.Write(buf[:], false)
 	return buf[:]
 }
 
-func inodeFromBytes(buf []byte) *InodeData {
+func InodeFromBytes(buf []byte) *InodeData {
 	nd := InodeData{}
 	nd.Read(buf)
 	return &nd

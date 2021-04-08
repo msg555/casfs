@@ -121,7 +121,7 @@ func (sc *StorageContext) LookupAddressInode(address []byte) (*InodeData, error)
 		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
 		v := b.Get(address)
 		if len(v) == INODE_SIZE {
-			result = inodeFromBytes(v)
+			result = InodeFromBytes(v)
 		}
 		return nil
 	})
@@ -136,7 +136,7 @@ func (sc *StorageContext) ReadInode(nodeIndex InodeId) (*InodeData, error) {
 	if err != nil {
 		return nil, err
 	}
-	return inodeFromBytes(buf), nil
+	return InodeFromBytes(buf), nil
 }
 
 func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, InodeId, error) {
@@ -147,13 +147,13 @@ func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, I
 	if data == nil {
 		return nil, 0, nil
 	}
-	return inodeFromBytes(data), childId, nil
+	return InodeFromBytes(data), childId, nil
 }
 
 func (sc *StorageContext) ScanChildren(nd *InodeData, offset uint64,
 	direntCallback func(offset uint64, inodeId InodeId, name string, ent *InodeData) bool) (bool, error) {
 	return sc.DirentTree.Scan(nd.TreeNode, offset, func(offset uint64, index btree.IndexType, key []byte, val []byte) bool {
-		return direntCallback(offset, index, string(key), inodeFromBytes(val))
+		return direntCallback(offset, index, string(key), InodeFromBytes(val))
 	})
 }
 

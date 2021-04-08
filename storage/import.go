@@ -108,7 +108,7 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 
 	err = sc.NodeDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
-		return b.Put(sn.NodeAddress[:], sn.Inode.toBytes())
+		return b.Put(sn.NodeAddress[:], sn.Inode.ToBytes())
 	})
 	if err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
 		v := b.Get(nd.NodeAddress[:])
 		if len(v) == INODE_SIZE {
-			nd.Inode = inodeFromBytes(v)
+			nd.Inode = InodeFromBytes(v)
 			return nil
 		}
 
@@ -153,7 +153,7 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 		direntMap := make(map[string][]byte)
 		for childPath, childNd := range children {
 			nd.Inode.Size += childNd.Inode.Size
-			direntMap[childPath] = childNd.Inode.toBytes()
+			direntMap[childPath] = childNd.Inode.ToBytes()
 		}
 		treeNode, err := sc.DirentTree.WriteRecords(direntMap)
 		if err != nil {
@@ -161,7 +161,7 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 		}
 
 		nd.Inode.TreeNode = treeNode
-		return b.Put(nd.NodeAddress[:], nd.Inode.toBytes())
+		return b.Put(nd.NodeAddress[:], nd.Inode.ToBytes())
 	})
 	if err != nil {
 		return nil

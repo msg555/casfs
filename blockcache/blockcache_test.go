@@ -19,8 +19,8 @@ func TestParallelismManyKey(t *testing.T) {
 	wg.Add(numObjs)
 	for i := 0; i < numObjs; i++ {
 		go func(obj int) {
-			err := cache.Access(nil, obj, true, func(buf []byte, created bool) (bool, error) {
-				if !created {
+			err := cache.Access(nil, obj, true, func(buf []byte, found bool) (bool, error) {
+				if found {
 					t.Fatal("expected element to be created")
 				}
 				wg.Done()
@@ -113,11 +113,11 @@ func TestFlushFuzz(t *testing.T) {
 
 	for i := 0; i < 10000; i++ {
 		k := rng.Int() % keyDomain
-		err := cache.Access(group, k, true, func(buf []byte, created bool) (bool, error) {
-			if created {
-				bo.PutUint32(buf, uint32(group.Backing[k])+1)
-			} else {
+		err := cache.Access(group, k, true, func(buf []byte, found bool) (bool, error) {
+			if found {
 				bo.PutUint32(buf, bo.Uint32(buf)+1)
+			} else {
+				bo.PutUint32(buf, uint32(group.Backing[k])+1)
 			}
 			return true, nil
 		})

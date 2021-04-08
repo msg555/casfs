@@ -35,6 +35,7 @@ const (
 
 	EACCES  = unix.EACCES
 	EBADF   = unix.EBADF
+	EINVAL  = unix.EINVAL
 	EIO     = unix.EIO
 	EISDIR  = unix.EISDIR
 	ENODATA = unix.ENODATA
