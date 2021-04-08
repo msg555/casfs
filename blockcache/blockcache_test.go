@@ -2,7 +2,7 @@ package blockcache
 
 import (
 	"encoding/binary"
-  "math/rand"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -40,9 +40,9 @@ func TestParallelismManyKey(t *testing.T) {
 	}()
 
 	select {
-		case <-c:
-		case <-time.After(1000000000):
-			t.Fatal("timed out waiting for routines to finish")
+	case <-c:
+	case <-time.After(1000000000):
+		t.Fatal("timed out waiting for routines to finish")
 	}
 }
 
@@ -50,35 +50,35 @@ func TestParallelismManyKey(t *testing.T) {
 // verifies that modifications to the buffer are made accessible to subsequent
 // accesses.
 func TestParallelismSingleKey(t *testing.T) {
-  numGoros := 100
-  cache := New(10, 4)
+	numGoros := 100
+	cache := New(10, 4)
 
-  wg := sync.WaitGroup{}
-  wg.Add(numGoros)
-  for i := 0; i < numGoros; i++ {
-    go func() {
-      err := cache.Access(nil, nil, true, func(buf []byte, _ bool) (bool, error) {
-				bo.PutUint32(buf, bo.Uint32(buf) + 1)
-        return true, nil
-      })
-      if err != nil {
-        t.Fatal(err)
-      }
+	wg := sync.WaitGroup{}
+	wg.Add(numGoros)
+	for i := 0; i < numGoros; i++ {
+		go func() {
+			err := cache.Access(nil, nil, true, func(buf []byte, _ bool) (bool, error) {
+				bo.PutUint32(buf, bo.Uint32(buf)+1)
+				return true, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			wg.Done()
-    }()
-  }
+		}()
+	}
 
-  c := make(chan struct{})
-  go func() {
-    wg.Wait()
-    c <- struct{}{}
-  }()
+	c := make(chan struct{})
+	go func() {
+		wg.Wait()
+		c <- struct{}{}
+	}()
 
-  select {
-    case <-c:
-    case <-time.After(1000000000):
-      t.Fatal("timed out waiting for routines to finish")
-  }
+	select {
+	case <-c:
+	case <-time.After(1000000000):
+		t.Fatal("timed out waiting for routines to finish")
+	}
 
 	err := cache.Access(nil, nil, true, func(buf []byte, _ bool) (bool, error) {
 		bufVal := bo.Uint32(buf)
@@ -102,26 +102,26 @@ func (f *TestMapFlusher) FlushBlock(key interface{}, buf []byte) error {
 }
 
 func TestFlushFuzz(t *testing.T) {
-  cache := New(10, 4)
+	cache := New(10, 4)
 
 	group := &TestMapFlusher{
 		Backing: make(map[int]int),
 	}
 
-  rng := rand.New(rand.NewSource(555))
+	rng := rand.New(rand.NewSource(555))
 	keyDomain := 20
 
 	for i := 0; i < 10000; i++ {
 		k := rng.Int() % keyDomain
 		err := cache.Access(group, k, true, func(buf []byte, created bool) (bool, error) {
 			if created {
-				bo.PutUint32(buf, uint32(group.Backing[k]) + 1)
+				bo.PutUint32(buf, uint32(group.Backing[k])+1)
 			} else {
-				bo.PutUint32(buf, bo.Uint32(buf) + 1)
+				bo.PutUint32(buf, bo.Uint32(buf)+1)
 			}
 			return true, nil
 		})
-		if (i + 1) % 100 == 0 {
+		if (i+1)%100 == 0 {
 			keyHits := 0
 			valTotal := 0
 			backedValTotal := 0
@@ -140,7 +140,7 @@ func TestFlushFuzz(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if valTotal != i + 1 {
+			if valTotal != i+1 {
 				t.Fatalf("did not find expected sum of values")
 			}
 			if backedValTotal >= valTotal {
@@ -158,12 +158,12 @@ func TestFlushFuzz(t *testing.T) {
 			for j := 0; j < keyDomain; j++ {
 				valTotal += group.Backing[j]
 			}
-			if valTotal != i + 1 {
+			if valTotal != i+1 {
 				t.Fatalf("FlushGroup did not push all values to backing")
 			}
 		}
-    if err != nil {
+		if err != nil {
 			t.Fatal(err)
 		}
-  }
+	}
 }

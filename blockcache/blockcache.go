@@ -22,12 +22,12 @@ type cacheVal struct {
 	Lock sync.Mutex
 
 	// Can be read holding cache.Lock or val.Lock, must hold both to write.
-	OldElem *list.Element
+	OldElem   *list.Element
 	DirtyElem *list.Element
 
 	// Immutable upon creation
 	GroupKey interface{}
-	SubKey interface{}
+	SubKey   interface{}
 }
 
 type BlockCache struct {
@@ -47,14 +47,14 @@ type BlockCache struct {
 
 	pool sync.Pool
 
-	groupMap map[interface{}]map[interface{}]*cacheVal
-	oldList *list.List
+	groupMap  map[interface{}]map[interface{}]*cacheVal
+	oldList   *list.List
 	dirtyList *list.List
 }
 
 func New(cacheSize, blockSize int) *BlockCache {
 	return &BlockCache{
-		Size: 0,
+		Size:      0,
 		CacheSize: cacheSize,
 		BlockSize: blockSize,
 		pool: sync.Pool{
@@ -62,8 +62,8 @@ func New(cacheSize, blockSize int) *BlockCache {
 				return make([]byte, blockSize)
 			},
 		},
-		groupMap: make(map[interface{}]map[interface{}]*cacheVal),
-		oldList: list.New(),
+		groupMap:  make(map[interface{}]map[interface{}]*cacheVal),
+		oldList:   list.New(),
 		dirtyList: list.New(),
 	}
 }
@@ -98,7 +98,7 @@ func (c *BlockCache) lookup(groupKey, key interface{}, create bool) (*cacheVal, 
 	var val *cacheVal
 	var created bool
 
-  c.lock.Lock()
+	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	err := c.evict()
@@ -106,33 +106,33 @@ func (c *BlockCache) lookup(groupKey, key interface{}, create bool) (*cacheVal, 
 		return nil, false, err
 	}
 
-  submap, ok := c.groupMap[groupKey]
-  if create && !ok {
-    submap = make(map[interface{}]*cacheVal)
-    c.groupMap[groupKey] = submap
-    ok = true
-  }
-  if ok {
-    val, ok = submap[key]
-    if create && !ok {
+	submap, ok := c.groupMap[groupKey]
+	if create && !ok {
+		submap = make(map[interface{}]*cacheVal)
+		c.groupMap[groupKey] = submap
+		ok = true
+	}
+	if ok {
+		val, ok = submap[key]
+		if create && !ok {
 			c.Size++
-      buf := c.pool.Get().([]byte)
+			buf := c.pool.Get().([]byte)
 			for i := 0; i < len(buf); i++ {
 				buf[i] = 0
 			}
-      val = &cacheVal{
-        Buf: buf,
+			val = &cacheVal{
+				Buf:      buf,
 				GroupKey: groupKey,
-				SubKey: key,
-      }
+				SubKey:   key,
+			}
 			val.OldElem = c.oldList.PushBack(val)
 			created = true
 
 			submap[key] = val
-    } else if ok {
+		} else if ok {
 			c.oldList.MoveToBack(val.OldElem)
 		}
-  }
+	}
 
 	return val, created, nil
 }
@@ -254,21 +254,20 @@ func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc f
 
 	modified, err := accessFunc(val.Buf, created)
 	if modified {
-			// Mark element dirty
-			c.lock.Lock()
-			if val.DirtyElem == nil {
-				val.DirtyElem = c.dirtyList.PushBack(val)
-			} else {
-				c.dirtyList.MoveToBack(val.DirtyElem)
-			}
-			c.lock.Unlock()
+		// Mark element dirty
+		c.lock.Lock()
+		if val.DirtyElem == nil {
+			val.DirtyElem = c.dirtyList.PushBack(val)
+		} else {
+			c.dirtyList.MoveToBack(val.DirtyElem)
+		}
+		c.lock.Unlock()
 	}
 	return err
 }
 
 func (c *BlockCache) FlushGroup(groupKey interface{}) error {
 	var vals []*cacheVal
-
 
 	c.lock.Lock()
 	submap, ok := c.groupMap[groupKey]
