@@ -20,8 +20,8 @@ var bo = binary.LittleEndian
 
 type KeyType = []byte
 type ValueType = []byte
-type IndexType = uint64
-type TreeIndex = uint64
+type IndexType = int64
+type TreeIndex = int64
 
 type KeyValuePair struct {
 	Key   KeyType
@@ -89,7 +89,7 @@ func (tr *BTree) Open(bf *blockfile.BlockFile) error {
 
 	nodeSize := 4 + tr.MaxKeySize + tr.EntrySize
 	blockSize := 4 + 8*(tr.FanOut+1) + nodeSize*tr.FanOut
-	if bf.BlockSize < blockSize {
+	if bf.Cache.BlockSize < blockSize {
 		return errors.New("insufficiently sized block file")
 	}
 
@@ -108,9 +108,9 @@ func (tr *BTree) ForkFrom(parent *BTree, path string, perm os.FileMode) error {
 	}
 
 	bf := blockfile.BlockFile{
-		BlockSize: parent.blocks[0].BlockSize,
+		Cache: parent.blocks[0].Cache,
 	}
-	err := bf.Open(path, perm, false)
+	err := bf.Open(path, perm)
 	if err != nil {
 		return err
 	}
@@ -199,14 +199,14 @@ func (tr *BTree) getBlockChild(block []byte, childInd int) TreeIndex {
 	if childInd < 0 || childInd > tr.FanOut {
 		panic("child index out of range")
 	}
-	return bo.Uint64(block[4+8*childInd:])
+	return TreeIndex(bo.Uint64(block[4+8*childInd:]))
 }
 
 func (tr *BTree) setBlockChild(block []byte, childInd int, childTr TreeIndex) {
 	if childInd < 0 || childInd > tr.FanOut {
 		panic("child index out of range")
 	}
-	bo.PutUint64(block[4+8*childInd:], childTr)
+	bo.PutUint64(block[4+8*childInd:], uint64(childTr))
 }
 
 func (tr *BTree) getNodeSlice(block []byte, i int) []byte {

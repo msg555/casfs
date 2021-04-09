@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path"
 
+	"github.com/msg555/ctrfs/blockcache"
 	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/castore"
@@ -28,6 +29,7 @@ type StorageContext struct {
 	DirentTree  btree.BTree
 	NodeDB      *bolt.DB
 	BasePath    string
+	Cache       *blockcache.BlockCache
 }
 
 type StorageNode struct {
@@ -70,18 +72,18 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 		Cas:         cas,
 		NodeDB:      nodeDB,
 		BasePath:    basePath,
-		BlockFile: blockfile.BlockFile{
-			BlockSize: 4096,
-		},
+		BlockFile:   blockfile.BlockFile{},
 		DirentTree: btree.BTree{
 			MaxKeySize:   unix.NAME_MAX,
 			EntrySize:    INODE_SIZE,
 			FanOut:       DIRENT_BTREE_FANOUT,
 			MaxForkDepth: 2,
 		},
+		Cache: blockcache.New(65536, 4096),
 	}
 
-	err = sc.BlockFile.Open(path.Join(basePath, "blocks.bin"), 0666, false)
+	sc.BlockFile.Cache = sc.Cache
+	err = sc.BlockFile.Open(path.Join(basePath, "blocks.bin"), 0666)
 	if err != nil {
 		sc.Close()
 		return nil, err

@@ -22,7 +22,7 @@ func (conn *Connection) nodeToAttr(inodeId storage.InodeId, inode *storage.Inode
 	}
 	return fuse.Attr{
 		Valid:     DURATION_DEFAULT,
-		Inode:     inodeId,
+		Inode:     uint64(inodeId),
 		Size:      size,
 		Blocks:    (size + 511) >> 9,
 		Atime:     nsTimestampToTime(inode.Atim),

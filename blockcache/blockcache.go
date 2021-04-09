@@ -40,12 +40,12 @@ type BlockCache struct {
 	// Size of block allocation for cache elements.
 	BlockSize int
 
+	Pool sync.Pool
+
 	// Global block cache lock. Never hold the global lock while holding a value
 	// lock. The opposite is permissable. Never block or invoke callbacks while
 	// holding this lock, it is meant to be a short-term lock.
 	lock sync.Mutex
-
-	pool sync.Pool
 
 	groupMap  map[interface{}]map[interface{}]*cacheVal
 	oldList   *list.List
@@ -57,7 +57,7 @@ func New(cacheSize, blockSize int) *BlockCache {
 		Size:      0,
 		CacheSize: cacheSize,
 		BlockSize: blockSize,
-		pool: sync.Pool{
+		Pool: sync.Pool{
 			New: func() interface{} {
 				return make([]byte, blockSize)
 			},
@@ -89,7 +89,7 @@ func (c *BlockCache) deleteValue(val *cacheVal) (bool, error) {
 	}
 
 	val.Dead = true
-	c.pool.Put(val.Buf)
+	c.Pool.Put(val.Buf)
 
 	return true, nil
 }
@@ -116,7 +116,7 @@ func (c *BlockCache) lookup(groupKey, key interface{}, create bool) (*cacheVal, 
 		val, ok = submap[key]
 		if create && !ok {
 			c.Size++
-			buf := c.pool.Get().([]byte)
+			buf := c.Pool.Get().([]byte)
 			for i := 0; i < len(buf); i++ {
 				buf[i] = 0
 			}
@@ -167,7 +167,7 @@ func (c *BlockCache) evict() error {
 
 		// Mark the value as dead.
 		val.Dead = true
-		c.pool.Put(val.Buf)
+		c.Pool.Put(val.Buf)
 
 		// Regrab map lock first to ensure anyone who sees a dead value will not get
 		// that dead value again if they refresh their value.

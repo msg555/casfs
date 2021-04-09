@@ -60,4 +60,9 @@ func main() {
 			fmt.Printf("imported '%s' as %s\n", file, hex.EncodeToString(nd.NodeAddress[:]))
 		}
 	}
+
+	err = sc.Close()
+	if err != nil {
+		log.Fatalf("failed shutting down storage: %s", err)
+	}
 }

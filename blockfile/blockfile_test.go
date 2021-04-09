@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+
+	"github.com/msg555/ctrfs/blockcache"
 )
 
 func tempFileCreate() (*os.File, error) {
@@ -28,11 +30,8 @@ func TestWriteRead(t *testing.T) {
 	}
 
 	bf := BlockFile{
-		BlockSize: 16,
-	}
-	err = bf.OpenFile(f)
-	if err != nil {
-		t.Fatalf("failed to open block file '%s'", err)
+		Cache: blockcache.New(100, 32),
+		File:  f,
 	}
 	defer func() {
 		err := bf.Close()
@@ -46,7 +45,7 @@ func TestWriteRead(t *testing.T) {
 		t.Fatalf("failed to allocate block '%s'", err)
 	}
 
-	myData := []byte("0123456789012345")
+	myData := []byte("01234567890123456789012345678901")
 	err = bf.Write(ind, myData)
 	if err != nil {
 		t.Fatalf("failed to write block '%s'", err)
@@ -69,7 +68,7 @@ func TestWriteRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to readat block '%s'", err)
 	}
-	if !bytes.Equal([]byte("0123wow789012345"), dataIn) {
+	if !bytes.Equal([]byte("0123wow7890123456789012345678901"), dataIn) {
 		t.Fatalf("got unexpected data back from read '%s'", err)
 	}
 
@@ -89,11 +88,8 @@ func TestBounds(t *testing.T) {
 	}
 
 	bf := BlockFile{
-		BlockSize: 16,
-	}
-	err = bf.OpenFile(f)
-	if err != nil {
-		t.Fatalf("failed to open block file '%s'", err)
+		Cache: blockcache.New(100, 32),
+		File:  f,
 	}
 	defer func() {
 		err := bf.Close()
@@ -109,15 +105,15 @@ func TestBounds(t *testing.T) {
 
 	err = bf.Write(ind, []byte("012345"))
 	if err == nil {
-		t.Fatalf("expected error do to write too small")
+		t.Fatalf("expected error due to write too small")
 	}
 
-	err = bf.Write(ind, []byte("01234567890123456"))
+	err = bf.Write(ind, []byte("0123456789012345678901234567890123"))
 	if err == nil {
-		t.Fatalf("expected error do to write too large")
+		t.Fatalf("expected error due to write too large")
 	}
 
-	buf := make([]byte, 1, 20)
+	buf := make([]byte, 1, 40)
 	nbuf, err := bf.Read(ind, buf)
 	if err != nil {
 		t.Fatalf("failed to read block '%s'", err)
@@ -125,40 +121,40 @@ func TestBounds(t *testing.T) {
 	if &nbuf[0] != &buf[0] {
 		t.Fatalf("unexpected allocation of buffer")
 	}
-	if len(nbuf) != 16 {
+	if len(nbuf) != 32 {
 		t.Fatalf("unexpected read result length")
 	}
 
 	_, err = bf.ReadAt(ind, -5, 3, buf)
 	if err == nil {
-		t.Fatalf("expected error do to negative offset")
+		t.Fatalf("expected error due to negative offset")
 	}
-	_, err = bf.ReadAt(ind, 0, 17, buf)
+	_, err = bf.ReadAt(ind, 0, 33, buf)
 	if err == nil {
-		t.Fatalf("expected error do to too large size")
+		t.Fatalf("expected error due to too large size")
 	}
-	_, err = bf.ReadAt(ind, 4, 14, buf)
+	_, err = bf.ReadAt(ind, 4, 30, buf)
 	if err == nil {
-		t.Fatalf("expected error do to read too far")
+		t.Fatalf("expected error due to read too far")
 	}
-	_, err = bf.ReadAt(ind, 0, 16, buf)
+	_, err = bf.ReadAt(ind, 0, 32, buf)
 	if err != nil {
 		t.Fatalf("unexpected failure to read whole buffer '%s'", err)
 	}
 
 	err = bf.WriteAt(ind, -5, buf[:3])
 	if err == nil {
-		t.Fatalf("expected error do to negative offset")
+		t.Fatalf("expected error due to negative offset")
 	}
-	err = bf.WriteAt(ind, 0, buf[:17])
+	err = bf.WriteAt(ind, 0, buf[:33])
 	if err == nil {
-		t.Fatalf("expected error do to too large size")
+		t.Fatalf("expected error due to too large size")
 	}
-	err = bf.WriteAt(ind, 4, buf[:14])
+	err = bf.WriteAt(ind, 4, buf[:30])
 	if err == nil {
-		t.Fatalf("expected error do to read too far")
+		t.Fatalf("expected error due to read too far")
 	}
-	err = bf.WriteAt(ind, 0, buf[:16])
+	err = bf.WriteAt(ind, 0, buf[:32])
 	if err != nil {
 		t.Fatalf("unexpected failure to write whole buffer '%s'", err)
 	}
@@ -171,11 +167,8 @@ func TestAllocateFree(t *testing.T) {
 	}
 
 	bf := BlockFile{
-		BlockSize: 16,
-	}
-	err = bf.OpenFile(f)
-	if err != nil {
-		t.Fatalf("failed to open block file '%s'", err)
+		Cache: blockcache.New(100, 32),
+		File:  f,
 	}
 	defer func() {
 		err := bf.Close()
@@ -184,12 +177,12 @@ func TestAllocateFree(t *testing.T) {
 		}
 	}()
 
-	maxBlocks := 8
+	maxBlocks := 30
 	blockIndex := make([]BlockIndex, maxBlocks)
-	indexAllocated := make([]bool, maxBlocks+1)
+	indexAllocated := make([]bool, 2*maxBlocks+1)
 	rng := rand.New(rand.NewSource(555))
 
-	for i := 0; i < 1024; i++ {
+	for i := 0; i < 10000; i++ {
 		j := rng.Int() % maxBlocks
 		if blockIndex[j] == 0 {
 			ind, err := bf.Allocate()
@@ -199,7 +192,8 @@ func TestAllocateFree(t *testing.T) {
 			if maxBlocks == 0 {
 				t.Fatalf("allocate should not return 0 unless there is an error")
 			}
-			if BlockIndex(maxBlocks) < ind {
+			if int64(len(indexAllocated)) <= ind {
+				println(i, ind)
 				t.Fatalf("allocated index is too large")
 			}
 			if indexAllocated[ind] {

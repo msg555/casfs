@@ -25,7 +25,7 @@ func updateDirEntryOffset(buf []byte, offset uint64) {
 	unix.Hbo.PutUint64(buf[8:], offset)
 }
 
-func addDirEntry(buf []byte, name string, inodeId uint64, inode *storage.InodeData) int {
+func addDirEntry(buf []byte, name string, inodeId storage.InodeId, inode *storage.InodeData) int {
 	/*
 	   define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 
@@ -44,7 +44,7 @@ func addDirEntry(buf []byte, name string, inodeId uint64, inode *storage.InodeDa
 		return 0
 	}
 
-	unix.Hbo.PutUint64(buf[0:], inodeId)
+	unix.Hbo.PutUint64(buf[0:], uint64(inodeId))
 	unix.Hbo.PutUint32(buf[16:], uint32(len(name)))
 	unix.Hbo.PutUint32(buf[20:], uint32(inode.Mode&unix.S_IFMT)>>12)
 

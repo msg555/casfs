@@ -26,7 +26,9 @@ func (tr *BTree) Insert(treeIndex TreeIndex, key KeyType, value ValueType, overw
 	}
 
 	// Need to create new root node.
-	block := make([]byte, tr.blocks[0].BlockSize)
+	block := tr.blocks[0].Cache.Pool.Get().([]byte)
+	defer tr.blocks[0].Cache.Pool.Put(block)
+
 	tr.setBlockSize(block, 1)
 	tr.setBlockChild(block, 0, tr1)
 	tr.setBlockChild(block, 1, tr2)
@@ -134,8 +136,11 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 		}
 	}
 
-	blockA := make([]byte, tr.blocks[0].BlockSize)
-	blockB := make([]byte, tr.blocks[0].BlockSize)
+	blockA := tr.blocks[0].Cache.Pool.Get().([]byte)
+	defer tr.blocks[0].Cache.Pool.Put(blockA)
+
+	blockB := tr.blocks[0].Cache.Pool.Get().([]byte)
+	defer tr.blocks[0].Cache.Pool.Put(blockB)
 
 	newBlockSize := tr.FanOut / 2
 	tr.setBlockSize(blockA, newBlockSize)

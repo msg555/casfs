@@ -39,7 +39,7 @@ func (nd *InodeData) Write(buf []byte, contentHash bool) {
 	if contentHash {
 		bo.PutUint64(buf[52:], 0)
 	} else {
-		bo.PutUint64(buf[52:], nd.TreeNode)
+		bo.PutUint64(buf[52:], uint64(nd.TreeNode))
 	}
 	copy(buf[60:], nd.PathHash[:])
 	copy(buf[60+HASH_BYTE_LENGTH:], nd.Address[:])
@@ -61,7 +61,7 @@ func (nd *InodeData) Read(buf []byte) {
 	nd.Mtim = bo.Uint64(buf[28:])
 	nd.Ctim = bo.Uint64(buf[36:])
 	nd.Size = bo.Uint64(buf[44:])
-	nd.TreeNode = bo.Uint64(buf[52:])
+	nd.TreeNode = btree.TreeIndex(bo.Uint64(buf[52:]))
 	copy(nd.PathHash[:], buf[60:])
 	copy(nd.Address[:], buf[60+HASH_BYTE_LENGTH:])
 	copy(nd.XattrAddress[:], buf[60+2*HASH_BYTE_LENGTH:])

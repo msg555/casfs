@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/msg555/ctrfs/blockcache"
 	"github.com/msg555/ctrfs/blockfile"
 )
 
@@ -22,12 +23,8 @@ func blockFileCreate(blockSize int) (*blockfile.BlockFile, error) {
 		return nil, err
 	}
 	bf := &blockfile.BlockFile{
-		BlockSize: blockSize,
-	}
-	err = bf.OpenFile(f)
-	if err != nil {
-		f.Close()
-		return nil, err
+		Cache: blockcache.New(1000, blockSize),
+		File:  f,
 	}
 	return bf, nil
 }

@@ -133,7 +133,7 @@ func (tr *BTree) Scan(treeIndex TreeIndex, offset uint64, entryCallback func(off
 		for i := stackDepth - 1; i >= 0; i-- {
 			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
 		}
-		if !entryCallback(offset, blockIndex*uint64(tr.FanOut)+uint64(index), key, value) {
+		if !entryCallback(offset, blockIndex*int64(tr.FanOut)+int64(index), key, value) {
 			return false, nil
 		}
 
@@ -158,7 +158,7 @@ func (tr *BTree) Find(treeIndex TreeIndex, key KeyType) (ValueType, IndexType, e
 		}
 
 		if match {
-			return tr.getNodeValue(tr.getNodeSlice(block, insertInd)), treeIndex*uint64(tr.FanOut) + uint64(insertInd), nil
+			return tr.getNodeValue(tr.getNodeSlice(block, insertInd)), treeIndex*int64(tr.FanOut) + int64(insertInd), nil
 		}
 
 		treeIndex = tr.getBlockChild(block, insertInd)
@@ -166,8 +166,8 @@ func (tr *BTree) Find(treeIndex TreeIndex, key KeyType) (ValueType, IndexType, e
 }
 
 func (tr *BTree) ByIndex(index IndexType) (ValueType, error) {
-	treeIndex := TreeIndex(index / uint64(tr.FanOut))
-	pos := int(index % uint64(tr.FanOut))
+	treeIndex := TreeIndex(index / int64(tr.FanOut))
+	pos := int(index % int64(tr.FanOut))
 
 	block, err := tr.readBlock(treeIndex, nil)
 	if err != nil {

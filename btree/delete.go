@@ -151,7 +151,9 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 		childBlockSize = len(nodeKeys) - 1 - sibBlockSize
 
 		// Copy values back into blocks
-		sibBlock = make([]byte, tr.blocks[0].BlockSize)
+		sibBlock = tr.blocks[0].Cache.Pool.Get().([]byte)
+		defer tr.blocks[0].Cache.Pool.Put(sibBlock)
+
 		tr.setBlockSize(sibBlock, sibBlockSize)
 		for i := 0; i <= sibBlockSize; i++ {
 			tr.setBlockChild(sibBlock, i, childTrees[i])
@@ -160,7 +162,9 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 			}
 		}
 
-		childBlock = make([]byte, tr.blocks[0].BlockSize)
+		childBlock = tr.blocks[0].Cache.Pool.Get().([]byte)
+		defer tr.blocks[0].Cache.Pool.Put(childBlock)
+
 		tr.setBlockSize(childBlock, childBlockSize)
 		for i := 0; i <= childBlockSize; i++ {
 			tr.setBlockChild(childBlock, i, childTrees[sibBlockSize+1+i])

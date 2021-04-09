@@ -15,8 +15,8 @@ func (mp *InodeMap) Init() {
 func (mp *InodeMap) Write(w io.Writer) error {
 	var buf [16]byte
 	for key, val := range mp.Map {
-		bo.PutUint64(buf[0:], key)
-		bo.PutUint64(buf[8:], val)
+		bo.PutUint64(buf[0:], uint64(key))
+		bo.PutUint64(buf[8:], uint64(val))
 		_, err := w.Write(buf[:])
 		if err != nil {
 			return err
