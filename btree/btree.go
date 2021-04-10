@@ -5,6 +5,15 @@
 // Has a simple API for constructing the B-tree all at once or by writing
 // it record by record in sorted order.
 
+/*
+TODO: Add offset support by annotating elements with a 64-bit unique ID (e.g.
+insertion counter).
+
+Support resume by caching the position (sort index) of unique IDs recently
+requested. then we may need to look a little forward and backwards to find the
+starting position.
+*/
+
 package btree
 
 import (

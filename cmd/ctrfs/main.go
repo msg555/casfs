@@ -34,7 +34,7 @@ func main() {
 		log.Fatal("failed to decode content address", err)
 	}
 
-	err = srv.Mount(pflag.Arg(0), rootAddress, true)
+	err = srv.Mount(pflag.Arg(0), rootAddress, false)
 	if err != nil {
 		gerr, ok := err.(*errors.Error)
 		if ok {

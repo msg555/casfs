@@ -73,39 +73,9 @@ func (srv *Server) Close() error {
 }
 
 func (srv *Server) Mount(mountPoint string, contentAddress []byte, readOnly bool, options ...fuse.MountOption) error {
-	rootInode, err := srv.Storage.LookupAddressInode(contentAddress)
+	mnt, err := srv.Storage.CreateMount(contentAddress, readOnly)
 	if err != nil {
 		return err
-	} else if rootInode == nil {
-		return errors.New("could not find root content address")
-	}
-
-	var inodeMap *storage.InodeMap
-	if rootInode.Mode == storage.MODE_HARDLINK_LAYER {
-		newRootInode, err := srv.Storage.LookupAddressInode(rootInode.PathHash[:])
-		if err != nil {
-			return err
-		} else if newRootInode == nil {
-			return errors.New("reference data layer missing")
-		}
-
-		// Read hlmap from Address
-		inodeMap = &storage.InodeMap{}
-		hlf, err := srv.Storage.Cas.Open(rootInode.XattrAddress[:])
-		if hlf == nil {
-			return errors.New("could not read inode map")
-		}
-		err = inodeMap.Read(hlf)
-		if err != nil {
-			hlf.Close()
-			return err
-		}
-		err = hlf.Close()
-		if err != nil {
-			return err
-		}
-
-		rootInode = newRootInode
 	}
 
 	mountPoint, err = filepath.Abs(mountPoint)
@@ -134,11 +104,9 @@ func (srv *Server) Mount(mountPoint string, contentAddress []byte, readOnly bool
 
 	ctrfsConn := &Connection{
 		Conn:       conn,
-		Storage:    srv.Storage,
 		MountPoint: mountPoint,
 		ReadOnly:   readOnly,
-		rootInode:  *rootInode,
-		inodeMap:   inodeMap,
+		Mount:      mnt,
 		handleMap:  make(map[fuse.HandleID]Handle),
 	}
 

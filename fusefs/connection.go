@@ -18,12 +18,9 @@ const FUSE_UNKNOWN_INO fuse.NodeID = 0xffffffff
 
 type Connection struct {
 	Conn       *fuse.Conn
-	Storage    *storage.StorageContext
 	MountPoint string
 	ReadOnly   bool
-
-	rootInode storage.InodeData
-	inodeMap  *storage.InodeMap
+	Mount      *storage.MountView
 
 	handleLock   sync.RWMutex
 	handleMap    map[fuse.HandleID]Handle
@@ -40,22 +37,11 @@ func (conn *Connection) Serve() error {
 	}
 }
 
-func (conn *Connection) remapInode(inodeId storage.InodeId) storage.InodeId {
-	if conn.inodeMap == nil {
-		return inodeId
-	}
-	newInodeId, found := conn.inodeMap.Map[inodeId]
-	if found {
-		return newInodeId
-	}
-	return inodeId
-}
-
 func (conn *Connection) GetInode(inodeId fuse.NodeID) (*storage.InodeData, error) {
 	if inodeId == FUSE_ROOT_ID {
-		return &conn.rootInode, nil
+		return &conn.Mount.RootInode, nil
 	}
-	return conn.Storage.ReadInode(storage.InodeId(inodeId))
+	return conn.Mount.GetInode(storage.InodeId(inodeId))
 }
 
 func (conn *Connection) handleRequest(req fuse.Request) {
@@ -95,6 +81,8 @@ func (conn *Connection) handleRequest(req fuse.Request) {
 	// Handle methods
 	case *fuse.ReadRequest:
 		err = conn.handleReadRequest(req.(*fuse.ReadRequest))
+	case *fuse.WriteRequest:
+		err = conn.handleWriteRequest(req.(*fuse.WriteRequest))
 	case *fuse.ReleaseRequest:
 		err = conn.handleReleaseRequest(req.(*fuse.ReleaseRequest))
 	case *fuse.FlushRequest:
@@ -136,7 +124,7 @@ func (conn *Connection) Close() error {
 }
 
 func (conn *Connection) handleStatfsRequest(req *fuse.StatfsRequest) error {
-	stfs, err := conn.Storage.Statfs()
+	stfs, err := conn.Mount.Storage.Statfs()
 	if err != nil {
 		return err
 	}

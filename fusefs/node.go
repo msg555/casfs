@@ -1,7 +1,6 @@
 package fusefs
 
 import (
-	"io/ioutil"
 	"time"
 
 	"bazil.org/fuse"
@@ -60,8 +59,7 @@ func (conn *Connection) handleLookupRequest(req *fuse.LookupRequest) error {
 		return err
 	}
 
-	childInode, childInodeId, err := conn.Storage.LookupChild(inode, req.Name)
-	childInodeId = conn.remapInode(childInodeId)
+	childInode, childInodeId, err := conn.Mount.LookupChild(inode, req.Name)
 	if err != nil {
 		return err
 	}
@@ -99,6 +97,7 @@ func (conn *Connection) handleOpenRequest(req *fuse.OpenRequest) error {
 	if err != nil {
 		return err
 	}
+	inodeId := storage.InodeId(req.Node)
 
 	if req.Dir && !unix.S_ISDIR(inode.Mode) {
 		return FuseError{
@@ -106,18 +105,21 @@ func (conn *Connection) handleOpenRequest(req *fuse.OpenRequest) error {
 			errno:  unix.ENOTDIR,
 		}
 	}
-	if req.Flags.IsWriteOnly() || req.Flags.IsReadWrite() {
-		return FuseError{
-			source: errors.New("read only file system"),
-			errno:  unix.EROFS,
+	/*
+		TODO: implement needed access checks here
+		if req.Flags.IsWriteOnly() || req.Flags.IsReadWrite() {
+			return FuseError{
+				source: errors.New("read only file system"),
+				errno:  unix.EROFS,
+			}
 		}
-	}
-	if (req.Flags & (fuse.OpenAppend | fuse.OpenCreate | fuse.OpenTruncate)) != 0 {
-		return FuseError{
-			source: errors.New("read only file system"),
-			errno:  unix.EROFS,
+		if (req.Flags & (fuse.OpenAppend | fuse.OpenCreate | fuse.OpenTruncate)) != 0 {
+			return FuseError{
+				source: errors.New("read only file system"),
+				errno:  unix.EROFS,
+			}
 		}
-	}
+	*/
 
 	// TODO: Ensure we havethe right permissions
 	var handleID fuse.HandleID
@@ -128,14 +130,15 @@ func (conn *Connection) handleOpenRequest(req *fuse.OpenRequest) error {
 			InodeData: inode,
 		})
 	case unix.S_IFREG:
-		file, err := conn.Storage.Cas.Open(inode.Address[:])
+		file, err := conn.Mount.GetFileView(inodeId, inode)
 		if err != nil {
 			return err
 		}
 
 		handleID = conn.OpenHandle(&FileHandleReg{
-			InodeData: inode,
-			File:      file,
+			Conn:     conn,
+			InodeId:  inodeId,
+			FileView: file,
 		})
 	default:
 		return errors.New("not implemented")
@@ -154,17 +157,7 @@ func (conn *Connection) handleReadlinkRequest(req *fuse.ReadlinkRequest) error {
 		return err
 	}
 
-	fin, err := conn.Storage.Cas.Open(inode.Address[:])
-	if err != nil {
-		return err
-	}
-
-	target, err := ioutil.ReadAll(fin)
-	if err != nil {
-		fin.Close()
-		return err
-	}
-	err = fin.Close()
+	target, err := conn.Mount.Readlink(inode)
 	if err != nil {
 		return err
 	}

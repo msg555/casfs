@@ -1,4 +1,4 @@
-package overlay
+package storage
 
 import (
 	"bufio"
@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/msg555/ctrfs/blockcache"
-	"github.com/msg555/ctrfs/storage"
 )
 
 func createTempFile() (string, error) {
@@ -68,11 +67,18 @@ func TestReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srcInode := storage.InodeData{
+
+	srcInode := InodeData{
 		Size: uint64(st.Size()),
 	}
 
-	f, err := OpenFileOverlay(srcPath, dstPath, &srcInode, 0666, cache)
+	srcOverlay, err := OpenROFileOverlay(srcPath, &srcInode, cache, "cas://1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcOverlay.Close()
+
+	f, err := OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +124,7 @@ func TestReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err = OpenFileOverlay(srcPath, dstPath, &srcInode, 0666, cache)
+	f, err = OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +169,17 @@ func TestTruncate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srcInode := storage.InodeData{
+	srcInode := InodeData{
 		Size: uint64(st.Size()),
 	}
-	println("SIZE", st.Size())
 
-	f, err := OpenFileOverlay(srcPath, dstPath, &srcInode, 0666, cache)
+	srcOverlay, err := OpenROFileOverlay(srcPath, &srcInode, cache, "cas://1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcOverlay.Close()
+
+	f, err := OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +199,10 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 
-	f.Truncate(5000)
+	f.UpdateInode(func(inodeData *InodeData) error {
+		inodeData.Size = 5000
+		return nil
+	})
 	n, err = f.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +225,19 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 
-	f.Truncate(10000)
+	extraData := []byte("hellolookatme")
+	_, err = f.WriteAt(extraData, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.UpdateInode(func(inodeData *InodeData) error {
+		if inodeData.Size != uint64(10000+len(extraData)) {
+			t.Fatal("file size did not increase with write at")
+		}
+		inodeData.Size = 10000
+		return nil
+	})
 	off = 9950
 	n, err = f.ReadAt(buf, int64(off))
 	if err != nil {
@@ -231,7 +257,7 @@ func TestTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err = OpenFileOverlay(srcPath, dstPath, &srcInode, 0666, cache)
+	f, err = OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,6 +267,24 @@ func TestTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 50 {
+		t.Fatalf("read unexpected number of bytes, wanted=50 got=%d", n)
+	}
+	for i := 0; i < n; i++ {
+		if buf[i] != 0 {
+			t.Fatal("unexpected data read")
+		}
+	}
+
+	f.UpdateInode(func(inodeData *InodeData) error {
+		inodeData.Size = 20000
+		return nil
+	})
+
+	n, err = f.ReadAt(buf, int64(off))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(buf) {
 		t.Fatalf("read unexpected number of bytes, wanted=50 got=%d", n)
 	}
 	for i := 0; i < n; i++ {

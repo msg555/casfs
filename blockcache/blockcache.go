@@ -353,7 +353,7 @@ func (c *BlockCache) RemoveGroup(groupKey interface{}) error {
 	}
 	c.lock.Unlock()
 
-	groupFlushable := groupKey.(Flushable)
+	groupFlushable, _ := groupKey.(Flushable)
 	for _, val := range vals {
 		val.Lock.Lock()
 
@@ -363,10 +363,12 @@ func (c *BlockCache) RemoveGroup(groupKey interface{}) error {
 		}
 
 		// Flush the element if dirty
-		err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
-		if err != nil {
-			val.Lock.Unlock()
-			return err
+		if groupFlushable != nil {
+			err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+			if err != nil {
+				val.Lock.Unlock()
+				return err
+			}
 		}
 
 		// Remove from dirty list

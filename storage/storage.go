@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"log"
+	"os"
 	"os/user"
 	"path"
 
@@ -50,6 +51,11 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 	hashFactory := sha256.New
 	cas, err := castore.CreateCastore(path.Join(basePath, "cas"), hashFactory)
 	if err != nil {
+		return nil, err
+	}
+
+	err = os.Mkdir(path.Join(basePath, "mounts"), 0777)
+	if err != nil && !os.IsExist(err) {
 		return nil, err
 	}
 
