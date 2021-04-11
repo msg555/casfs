@@ -53,7 +53,7 @@ func TestFuzz(t *testing.T) {
 	treeRoot := EMPTY_TREE_ROOT
 
 	data := make(map[string]string)
-	for i := 0; i < 100000; i++ {
+	for i := 0; i < 50000; i++ {
 		k := fmt.Sprintf("%d", rng.Int()%keyDomain)
 		switch rng.Int() % 3 {
 		case 0: // Find
@@ -120,7 +120,7 @@ func TestFuzz(t *testing.T) {
 			count := 0
 			failMsg := ""
 
-			tr.Scan(treeRoot, 0, func(_ uint64, _ IndexType, key KeyType, val ValueType) bool {
+			done, err := tr.Scan(treeRoot, nil, func(_ IndexType, key KeyType, val ValueType) bool {
 				count++
 				mpVal, mpOk := data[string(key)]
 				if !mpOk {
@@ -133,6 +133,50 @@ func TestFuzz(t *testing.T) {
 				}
 				return true
 			})
+			if err != nil {
+				t.Fatalf("unexpected scan error: '%s'", err)
+			}
+			if !done {
+				t.Fatalf("scan unexpectedly did not complete")
+			}
+
+			if failMsg != "" {
+				t.Fatal(failMsg)
+			}
+			if count != len(data) {
+				t.Fatalf("unexpected number of elements in tree")
+			}
+
+			count = 0
+			var searchStart []byte
+			for {
+				first := true
+				done, err := tr.Scan(treeRoot, searchStart, func(_ IndexType, key KeyType, val ValueType) bool {
+					if !first {
+						searchStart = key
+						return false
+					}
+					first = false
+
+					count++
+					mpVal, mpOk := data[string(key)]
+					if !mpOk {
+						failMsg = "got key from Scan that doesn't exist"
+						return false
+					}
+					if bytes.Compare(val, []byte(mpVal)) != 0 {
+						failMsg = "got incorrect value from Scan"
+						return false
+					}
+					return true
+				})
+				if err != nil {
+					t.Fatalf("unexpected scan error: '%s'", err)
+				}
+				if done {
+					break
+				}
+			}
 
 			if failMsg != "" {
 				t.Fatal(failMsg)

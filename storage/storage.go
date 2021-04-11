@@ -158,13 +158,6 @@ func (sc *StorageContext) LookupChild(nd *InodeData, name string) (*InodeData, I
 	return InodeFromBytes(data), childId, nil
 }
 
-func (sc *StorageContext) ScanChildren(nd *InodeData, offset uint64,
-	direntCallback func(offset uint64, inodeId InodeId, name string, ent *InodeData) bool) (bool, error) {
-	return sc.DirentTree.Scan(nd.TreeNode, offset, func(offset uint64, index btree.IndexType, key []byte, val []byte) bool {
-		return direntCallback(offset, index, string(key), InodeFromBytes(val))
-	})
-}
-
 func (sc *StorageContext) computeNodeAddress(st *InodeData) []byte {
 	h := sc.HashFactory()
 

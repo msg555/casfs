@@ -132,15 +132,14 @@ func (mnt *MountView) LookupChild(inode *InodeData, name string) (*InodeData, In
 	return childInode, childInodeId, err
 }
 
-func (mnt *MountView) ScanChildren(inodeData *InodeData, offset uint64, scanFunc func(uint64, InodeId, string, *InodeData) bool) (bool, error) {
-	return mnt.Storage.DirentTree.Scan(inodeData.TreeNode, offset, func(offset uint64, index btree.IndexType, key []byte, val []byte) bool {
+func (mnt *MountView) ScanChildren(inodeData *InodeData, startName string, scanFunc func(InodeId, string, *InodeData) bool) (bool, error) {
+	return mnt.Storage.DirentTree.Scan(inodeData.TreeNode, []byte(startName), func(index btree.IndexType, key []byte, val []byte) bool {
 		inodeId := InodeId(index)
 		if newInodeId, found := mnt.inodeMap.Map[inodeId]; found {
 			inodeId = newInodeId
 		}
-		return scanFunc(offset, inodeId, string(key), InodeFromBytes(val))
+		return scanFunc(inodeId, string(key), InodeFromBytes(val))
 	})
-
 }
 
 func (mnt *MountView) GetInode(inodeId InodeId) (*InodeData, error) {

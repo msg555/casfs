@@ -77,6 +77,31 @@ func (conn *Connection) OpenHandle(handle Handle) fuse.HandleID {
 type FileHandleDir struct {
 	Conn *Connection
 	*storage.InodeData
+
+	Offset    uint64
+	OffsetKey string
+}
+
+func keyToOffset(key string) uint64 {
+	offset := uint64(0)
+	for i := 0; i < 8 && i < len(key); i++ {
+		offset |= uint64(key[i]) << (64 - (i+1)*8)
+	}
+	if offset == DIRENT_OFFSET_EOF {
+		offset--
+	}
+	return offset
+}
+
+func offsetToKey(offset uint64) string {
+	var key [8]byte
+	for i := 0; i < 8; i++ {
+		bt := (offset >> (64 - (i+1)*8)) & 0xFF
+		if bt == 0 {
+			return string(key[:i])
+		}
+	}
+	return string(key[:])
 }
 
 func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
@@ -88,13 +113,20 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 		return nil
 	}
 
+	// Someone seek'ed our handle. This isn't well supported but we'll try to
+	// handle it.
+	if uint64(req.Offset) != h.Offset {
+		h.Offset = uint64(req.Offset)
+		h.OffsetKey = offsetToKey(h.Offset)
+	}
+
 	buf := make([]byte, req.Size)
 
 	lastOffset := 0
 	bufOffset := 0
-	complete, err := h.Conn.Mount.ScanChildren(h.InodeData, uint64(req.Offset), func(offset uint64, inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
+	complete, err := h.Conn.Mount.ScanChildren(h.InodeData, h.OffsetKey, func(inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
 		if bufOffset != 0 {
-			updateDirEntryOffset(buf[lastOffset:], offset)
+			updateDirEntryOffset(buf[lastOffset:], keyToOffset(name))
 		}
 
 		size := addDirEntry(buf[bufOffset:], name, inodeId, inode)

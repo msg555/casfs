@@ -7,6 +7,10 @@ import (
 )
 
 func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
+	if key == nil {
+		return 0, false, nil
+	}
+
 	lo := 0
 	hi := tr.getBlockSize(block) - 1
 	if hi < 0 || hi >= tr.FanOut {
@@ -17,7 +21,7 @@ func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
 		nodeData := tr.getNodeSlice(block, md)
 
 		nodeKey := tr.getNodeKey(nodeData)
-		if len(key) == 0 {
+		if len(nodeKey) == 0 {
 			return 0, false, errors.New("unexpected key")
 		}
 
@@ -43,42 +47,33 @@ func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
 // for each entry. If entryCallback returns false the scan will terminate.
 // A scan can be resumed starting at a given entry by passing back the offset
 // parameter sent to the callback function.
-// If the scan finishes processing all records it will return 0. Otherwise
-// it will return an opaque offset that can be passed back to Scan() to resume
-// the scan starting with the record that entryCallback returned false on.
-// Scan() will return true if the scan has reached the end of the btree.
-func (tr *BTree) Scan(treeIndex TreeIndex, offset uint64, entryCallback func(offset uint64, index IndexType, key KeyType, value ValueType) bool) (bool, error) {
-	if treeIndex == 0 {
-		return true, nil
-	}
-
+func (tr *BTree) Scan(treeIndex TreeIndex, startKey KeyType, entryCallback func(index IndexType, key KeyType, value ValueType) bool) (bool, error) {
 	var stackBlocks [][]byte
 	var stackBlockIndexes []TreeIndex
 	var stackIndexes []int
-	for {
+	for treeIndex != 0 {
 		block, err := tr.readBlock(treeIndex, nil)
 		if err != nil {
 			return false, err
 		}
 
-		childIndex := offset % uint64(tr.FanOut+1)
+		insertInd, match, err := tr.searchBlock(block, startKey)
+		if err != nil {
+			return false, err
+		}
+
 		stackBlocks = append(stackBlocks, block)
 		stackBlockIndexes = append(stackBlockIndexes, treeIndex)
-		stackIndexes = append(stackIndexes, int(childIndex))
-		if offset <= uint64(tr.FanOut) {
+		stackIndexes = append(stackIndexes, insertInd)
+		if match {
 			break
 		}
 
-		offset /= uint64(tr.FanOut + 1)
-		treeIndex = tr.getBlockChild(block, int(childIndex))
+		treeIndex = tr.getBlockChild(block, insertInd)
 	}
 
-	moveUp := true
+	moveUp := false
 	stackDepth := len(stackIndexes) - 1
-	if stackIndexes[stackDepth] > 0 {
-		stackIndexes[stackDepth]--
-		moveUp = false
-	}
 	for {
 		if moveUp {
 			for {
@@ -128,12 +123,7 @@ func (tr *BTree) Scan(treeIndex TreeIndex, offset uint64, entryCallback func(off
 		}
 
 		value := tr.getNodeValue(nodeData)
-
-		offset = uint64(index + 1)
-		for i := stackDepth - 1; i >= 0; i-- {
-			offset = offset*uint64(tr.FanOut+1) + uint64(stackIndexes[i])
-		}
-		if !entryCallback(offset, blockIndex*int64(tr.FanOut)+int64(index), key, value) {
+		if !entryCallback(blockIndex*int64(tr.FanOut)+int64(index), key, value) {
 			return false, nil
 		}
 
