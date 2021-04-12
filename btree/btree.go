@@ -18,7 +18,6 @@ package btree
 
 import (
 	"encoding/binary"
-	"os"
 
 	"github.com/go-errors/errors"
 
@@ -111,17 +110,9 @@ func (tr *BTree) Open(bf *blockfile.BlockFile) error {
 // Forks a B-tree to create a new tree where writes are written only to a new
 // separate block file. This forked tree's lifetime must be shorter than its
 // parent as it relies on resources owned and managed by the parent tree.
-func (tr *BTree) ForkFrom(parent *BTree, path string, perm os.FileMode) error {
-	if len(parent.blocks)+1 >= parent.MaxForkDepth {
+func (tr *BTree) ForkFrom(parent *BTree, bf *blockfile.BlockFile) error {
+	if len(parent.blocks)+1 > parent.MaxForkDepth {
 		return errors.New("parent already at maximum fork depth")
-	}
-
-	bf := blockfile.BlockFile{
-		Cache: parent.blocks[0].Cache,
-	}
-	err := bf.Open(path, perm)
-	if err != nil {
-		return err
 	}
 
 	tr.MaxKeySize = parent.MaxKeySize
@@ -131,7 +122,7 @@ func (tr *BTree) ForkFrom(parent *BTree, path string, perm os.FileMode) error {
 
 	tr.blocks = make([]*blockfile.BlockFile, len(parent.blocks)+1)
 	copy(tr.blocks, parent.blocks)
-	tr.blocks[len(parent.blocks)] = &bf
+	tr.blocks[len(parent.blocks)] = bf
 
 	tr.nodeSize = parent.nodeSize
 

@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/google/uuid"
 
+	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 )
 
@@ -31,6 +32,11 @@ type fileViewRef struct {
 	Wfile FileView
 }
 
+type dirViewRef struct {
+	Cnt int
+	DirView
+}
+
 type MountView struct {
 	ID        uuid.UUID
 	RootInode InodeData
@@ -38,9 +44,15 @@ type MountView struct {
 	WritePath string
 	Storage   *StorageContext
 
+	blockfile.BlockFile
+	DirentTree *btree.BTree
+
 	inodeMap     InodeMap
 	fileViewMap  map[InodeId]*fileViewRef
 	fileViewLock sync.Mutex
+
+	dirViewMap  map[InodeId]*dirViewRef
+	dirViewLock sync.Mutex
 }
 
 func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*MountView, error) {
@@ -53,10 +65,14 @@ func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*Mount
 
 	id := uuid.New()
 	mnt := &MountView{
-		ID:          id,
-		ReadOnly:    readOnly,
-		Storage:     sc,
+		ID:       id,
+		ReadOnly: readOnly,
+		Storage:  sc,
+		BlockFile: blockfile.BlockFile{
+			Cache: sc.Cache,
+		},
 		fileViewMap: make(map[InodeId]*fileViewRef),
+		dirViewMap:  make(map[InodeId]*dirViewRef),
 	}
 
 	if rootInode.Mode == MODE_HARDLINK_LAYER {
@@ -95,6 +111,24 @@ func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*Mount
 		}
 
 		ioutil.WriteFile(path.Join(mnt.WritePath, "root"), rootAddress, 0666)
+
+		err = mnt.BlockFile.Open(path.Join(mnt.WritePath, "blocks"), 0666)
+		if err != nil {
+			return nil, err
+		}
+
+		mnt.DirentTree = &btree.BTree{
+			MaxKeySize:   sc.DirentTree.MaxKeySize,
+			EntrySize:    sc.DirentTree.EntrySize,
+			FanOut:       sc.DirentTree.FanOut,
+			MaxForkDepth: sc.DirentTree.MaxForkDepth,
+		}
+		err = mnt.DirentTree.ForkFrom(&sc.DirentTree, &mnt.BlockFile)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		mnt.DirentTree = &sc.DirentTree
 	}
 
 	return mnt, nil
@@ -130,16 +164,6 @@ func (mnt *MountView) LookupChild(inode *InodeData, name string) (*InodeData, In
 		childInodeId = newInodeId
 	}
 	return childInode, childInodeId, err
-}
-
-func (mnt *MountView) ScanChildren(inodeData *InodeData, startName string, scanFunc func(InodeId, string, *InodeData) bool) (bool, error) {
-	return mnt.Storage.DirentTree.Scan(inodeData.TreeNode, []byte(startName), func(index btree.IndexType, key []byte, val []byte) bool {
-		inodeId := InodeId(index)
-		if newInodeId, found := mnt.inodeMap.Map[inodeId]; found {
-			inodeId = newInodeId
-		}
-		return scanFunc(inodeId, string(key), InodeFromBytes(val))
-	})
 }
 
 func (mnt *MountView) GetInode(inodeId InodeId) (*InodeData, error) {
@@ -195,7 +219,7 @@ func (mnt *MountView) GetFileView(inodeId InodeId, inodeData *InodeData) (FileVi
 	return ref.Wfile, nil
 }
 
-func (mnt *MountView) ReleaseView(inodeId InodeId) error {
+func (mnt *MountView) ReleaseFileView(inodeId InodeId) error {
 	mnt.fileViewLock.Lock()
 	defer mnt.fileViewLock.Unlock()
 
@@ -211,4 +235,44 @@ func (mnt *MountView) ReleaseView(inodeId InodeId) error {
 	delete(mnt.fileViewMap, inodeId)
 
 	return ref.Rfile.Close()
+}
+
+func (mnt *MountView) GetDirView(inodeId InodeId, inodeData *InodeData) (*DirView, error) {
+	mnt.dirViewLock.Lock()
+	defer mnt.dirViewLock.Unlock()
+
+	ref, ok := mnt.dirViewMap[inodeId]
+	if !ok {
+		ref = &dirViewRef{
+			Cnt: 1,
+			DirView: DirView{
+				Mount:     mnt,
+				InodeData: *inodeData,
+			},
+		}
+
+		mnt.dirViewMap[inodeId] = ref
+	} else {
+		ref.Cnt++
+	}
+
+	return &ref.DirView, nil
+}
+
+func (mnt *MountView) ReleaseDirView(inodeId InodeId) error {
+	mnt.dirViewLock.Lock()
+	defer mnt.dirViewLock.Unlock()
+
+	ref, ok := mnt.dirViewMap[inodeId]
+	if !ok {
+		panic("release of dir view for inode that has no active view")
+	}
+
+	ref.Cnt--
+	if ref.Cnt > 0 {
+		return nil
+	}
+	delete(mnt.dirViewMap, inodeId)
+
+	return nil
 }

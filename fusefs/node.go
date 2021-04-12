@@ -125,9 +125,14 @@ func (conn *Connection) handleOpenRequest(req *fuse.OpenRequest) error {
 	var handleID fuse.HandleID
 	switch inode.Mode & unix.S_IFMT {
 	case unix.S_IFDIR:
+		dirView, err := conn.Mount.GetDirView(inodeId, inode)
+		if err != nil {
+			return err
+		}
 		handleID = conn.OpenHandle(&FileHandleDir{
-			Conn:      conn,
-			InodeData: inode,
+			Conn:    conn,
+			InodeId: inodeId,
+			DirView: dirView,
 		})
 	case unix.S_IFREG:
 		file, err := conn.Mount.GetFileView(inodeId, inode)

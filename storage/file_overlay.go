@@ -3,6 +3,7 @@ package storage
 import (
 	"io"
 	"os"
+	"sync"
 
 	"github.com/go-errors/errors"
 
@@ -22,6 +23,9 @@ type fileOverlay struct {
 
 	// Minimum size the file has ever been.
 	minFileSize uint64
+
+	// RW lock to protect inode data.
+	inodeLock sync.RWMutex
 }
 
 func OpenFileOverlay(src FileView, dstPath string, dstPerm os.FileMode, cache *blockcache.BlockCache) (*fileOverlay, error) {
@@ -65,6 +69,9 @@ func (f *fileOverlay) GetInode() InodeData {
 }
 
 func (f *fileOverlay) UpdateInode(accessFunc func(*InodeData) error) error {
+	f.inodeLock.Lock()
+	defer f.inodeLock.Unlock()
+
 	origSize := f.inodeData.Size
 	err := accessFunc(&f.inodeData)
 	if err != nil {
@@ -263,6 +270,9 @@ func (f *fileOverlay) dataBlockIndex(dataBlock int64) int64 {
 }
 
 func (f *fileOverlay) ReadAt(p []byte, off int64) (int, error) {
+	f.inodeLock.RLock()
+	defer f.inodeLock.RUnlock()
+
 	if off < 0 {
 		return 0, unix.EINVAL
 	}
@@ -324,6 +334,9 @@ func (f *fileOverlay) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *fileOverlay) WriteAt(p []byte, off int64) (int, error) {
+	f.inodeLock.RLock()
+	defer f.inodeLock.RUnlock()
+
 	if off < 0 {
 		return 0, unix.EINVAL
 	}

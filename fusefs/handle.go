@@ -76,7 +76,8 @@ func (conn *Connection) OpenHandle(handle Handle) fuse.HandleID {
 
 type FileHandleDir struct {
 	Conn *Connection
-	*storage.InodeData
+	storage.InodeId
+	*storage.DirView
 
 	Offset    uint64
 	OffsetKey string
@@ -124,7 +125,7 @@ func (h *FileHandleDir) Read(req *fuse.ReadRequest) error {
 
 	lastOffset := 0
 	bufOffset := 0
-	complete, err := h.Conn.Mount.ScanChildren(h.InodeData, h.OffsetKey, func(inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
+	complete, err := h.DirView.ScanChildren(h.OffsetKey, func(inodeId storage.InodeId, name string, inode *storage.InodeData) bool {
 		if bufOffset != 0 {
 			updateDirEntryOffset(buf[lastOffset:], keyToOffset(name))
 		}
@@ -159,6 +160,10 @@ func (h *FileHandleDir) Write(req *fuse.WriteRequest) error {
 }
 
 func (h *FileHandleDir) Release(req *fuse.ReleaseRequest) error {
+	err := h.Conn.Mount.ReleaseDirView(h.InodeId)
+	if err != nil {
+		return err
+	}
 	req.Respond()
 	return nil
 }
@@ -198,8 +203,7 @@ func (h *FileHandleReg) Write(req *fuse.WriteRequest) error {
 }
 
 func (h *FileHandleReg) Release(req *fuse.ReleaseRequest) error {
-	println("RELEASE", h)
-	err := h.Conn.Mount.ReleaseView(h.InodeId)
+	err := h.Conn.Mount.ReleaseFileView(h.InodeId)
 	if err != nil {
 		return err
 	}
