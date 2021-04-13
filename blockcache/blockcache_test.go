@@ -19,13 +19,13 @@ func TestParallelismManyKey(t *testing.T) {
 	wg.Add(numObjs)
 	for i := 0; i < numObjs; i++ {
 		go func(obj int) {
-			err := cache.Access(nil, obj, true, func(buf []byte, found bool) (bool, error) {
+			err := cache.Access(nil, obj, true, func(_ interface{}, buf []byte, found bool) (interface{}, bool, error) {
 				if found {
 					t.Fatal("expected element to be created")
 				}
 				wg.Done()
 				wg.Wait()
-				return false, nil
+				return nil, false, nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -57,9 +57,9 @@ func TestParallelismSingleKey(t *testing.T) {
 	wg.Add(numGoros)
 	for i := 0; i < numGoros; i++ {
 		go func() {
-			err := cache.Access(nil, nil, true, func(buf []byte, _ bool) (bool, error) {
+			err := cache.Access(nil, nil, true, func(_ interface{}, buf []byte, _ bool) (interface{}, bool, error) {
 				bo.PutUint32(buf, bo.Uint32(buf)+1)
-				return true, nil
+				return nil, true, nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -80,12 +80,12 @@ func TestParallelismSingleKey(t *testing.T) {
 		t.Fatal("timed out waiting for routines to finish")
 	}
 
-	err := cache.Access(nil, nil, true, func(buf []byte, _ bool) (bool, error) {
+	err := cache.Access(nil, nil, true, func(_ interface{}, buf []byte, _ bool) (interface{}, bool, error) {
 		bufVal := bo.Uint32(buf)
 		if bufVal != uint32(numGoros) {
 			t.Fatalf("Expected bufVal %d but got %d", numGoros, bufVal)
 		}
-		return false, nil
+		return nil, false, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,9 +96,9 @@ type TestMapFlusher struct {
 	Backing map[int]int
 }
 
-func (f *TestMapFlusher) FlushBlock(key interface{}, buf []byte) error {
+func (f *TestMapFlusher) FlushBlock(key interface{}, tag interface{}, buf []byte) (interface{}, error) {
 	f.Backing[key.(int)] = int(bo.Uint32(buf))
-	return nil
+	return nil, nil
 }
 
 func TestFlushFuzz(t *testing.T) {
@@ -113,20 +113,20 @@ func TestFlushFuzz(t *testing.T) {
 
 	for i := 0; i < 10000; i++ {
 		k := rng.Int() % keyDomain
-		err := cache.Access(group, k, true, func(buf []byte, found bool) (bool, error) {
+		err := cache.Access(group, k, true, func(_ interface{}, buf []byte, found bool) (interface{}, bool, error) {
 			if found {
 				bo.PutUint32(buf, bo.Uint32(buf)+1)
 			} else {
 				bo.PutUint32(buf, uint32(group.Backing[k])+1)
 			}
-			return true, nil
+			return nil, true, nil
 		})
 		if (i+1)%100 == 0 {
 			keyHits := 0
 			valTotal := 0
 			backedValTotal := 0
 			for j := 0; j < keyDomain; j++ {
-				err := cache.Access(group, j, false, func(buf []byte, _ bool) (bool, error) {
+				err := cache.Access(group, j, false, func(_ interface{}, buf []byte, _ bool) (interface{}, bool, error) {
 					if buf == nil {
 						valTotal += group.Backing[j]
 						backedValTotal += group.Backing[j]
@@ -134,7 +134,7 @@ func TestFlushFuzz(t *testing.T) {
 						valTotal += int(bo.Uint32(buf))
 						keyHits++
 					}
-					return true, nil
+					return nil, true, nil
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -167,9 +167,9 @@ func TestFlushFuzz(t *testing.T) {
 		}
 	}
 
-	err := cache.Access(group, 0, true, func(buf []byte, created bool) (bool, error) {
+	err := cache.Access(group, 0, true, func(_ interface{}, buf []byte, created bool) (interface{}, bool, error) {
 		bo.PutUint32(buf, uint32(0xFFFFFFFF))
-		return true, nil
+		return nil, true, nil
 	})
 	if err != nil {
 		t.Fatal(err)

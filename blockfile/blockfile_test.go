@@ -33,6 +33,7 @@ func TestWriteRead(t *testing.T) {
 		Cache: blockcache.New(100, 32),
 		File:  f,
 	}
+	bf.Init()
 	defer func() {
 		err := bf.Close()
 		if err != nil {
@@ -40,13 +41,13 @@ func TestWriteRead(t *testing.T) {
 		}
 	}()
 
-	ind, err := bf.Allocate()
+	ind, err := bf.Allocate(nil)
 	if err != nil {
 		t.Fatalf("failed to allocate block '%s'", err)
 	}
 
 	myData := []byte("01234567890123456789012345678901")
-	err = bf.Write(ind, myData)
+	err = bf.Write(nil, ind, myData)
 	if err != nil {
 		t.Fatalf("failed to write block '%s'", err)
 	}
@@ -59,7 +60,7 @@ func TestWriteRead(t *testing.T) {
 		t.Fatalf("got unexpected data back from read '%s'", err)
 	}
 
-	err = bf.WriteAt(ind, 4, []byte("wow"))
+	err = bf.WriteAt(nil, ind, 4, []byte("wow"))
 	if err != nil {
 		t.Fatalf("failed to writeat block '%s'", err)
 	}
@@ -91,6 +92,7 @@ func TestBounds(t *testing.T) {
 		Cache: blockcache.New(100, 32),
 		File:  f,
 	}
+	bf.Init()
 	defer func() {
 		err := bf.Close()
 		if err != nil {
@@ -98,17 +100,17 @@ func TestBounds(t *testing.T) {
 		}
 	}()
 
-	ind, err := bf.Allocate()
+	ind, err := bf.Allocate(nil)
 	if err != nil {
 		t.Fatalf("failed to allocate block '%s'", err)
 	}
 
-	err = bf.Write(ind, []byte("012345"))
+	err = bf.Write(nil, ind, []byte("012345"))
 	if err == nil {
 		t.Fatalf("expected error due to write too small")
 	}
 
-	err = bf.Write(ind, []byte("0123456789012345678901234567890123"))
+	err = bf.Write(nil, ind, []byte("0123456789012345678901234567890123"))
 	if err == nil {
 		t.Fatalf("expected error due to write too large")
 	}
@@ -142,19 +144,19 @@ func TestBounds(t *testing.T) {
 		t.Fatalf("unexpected failure to read whole buffer '%s'", err)
 	}
 
-	err = bf.WriteAt(ind, -5, buf[:3])
+	err = bf.WriteAt(nil, ind, -5, buf[:3])
 	if err == nil {
 		t.Fatalf("expected error due to negative offset")
 	}
-	err = bf.WriteAt(ind, 0, buf[:33])
+	err = bf.WriteAt(nil, ind, 0, buf[:33])
 	if err == nil {
 		t.Fatalf("expected error due to too large size")
 	}
-	err = bf.WriteAt(ind, 4, buf[:30])
+	err = bf.WriteAt(nil, ind, 4, buf[:30])
 	if err == nil {
 		t.Fatalf("expected error due to read too far")
 	}
-	err = bf.WriteAt(ind, 0, buf[:32])
+	err = bf.WriteAt(nil, ind, 0, buf[:32])
 	if err != nil {
 		t.Fatalf("unexpected failure to write whole buffer '%s'", err)
 	}
@@ -170,6 +172,7 @@ func TestAllocateFree(t *testing.T) {
 		Cache: blockcache.New(100, 32),
 		File:  f,
 	}
+	bf.Init()
 	defer func() {
 		err := bf.Close()
 		if err != nil {
@@ -184,8 +187,9 @@ func TestAllocateFree(t *testing.T) {
 
 	for i := 0; i < 10000; i++ {
 		j := rng.Int() % maxBlocks
+		tag := rng.Int() % 4
 		if blockIndex[j] == 0 {
-			ind, err := bf.Allocate()
+			ind, err := bf.Allocate(tag)
 			if err != nil {
 				t.Fatalf("failed to allocate block '%s'", err)
 			}
@@ -210,5 +214,147 @@ func TestAllocateFree(t *testing.T) {
 			blockIndex[j] = 0
 			indexAllocated[ind] = false
 		}
+	}
+}
+
+func TestTags(t *testing.T) {
+	f, err := tempFileCreate()
+	if err != nil {
+		t.Fatalf("unexpected error creating temp file '%s'", err)
+	}
+
+	bf := BlockFile{
+		Cache: blockcache.New(200, 32),
+		File:  f,
+	}
+	bf.Init()
+	defer func() {
+		err := bf.Close()
+		if err != nil {
+			t.Fatalf("failed to close temp file '%s'", err)
+		}
+	}()
+
+	rng := rand.New(rand.NewSource(555))
+
+	numTags := 5
+	blockIndex := make([]BlockIndex, 100)
+	blockTag := make([]interface{}, 100)
+	for i := 0; i < len(blockIndex); i++ {
+		blockTag[i] = rng.Int() % numTags
+		index, err := bf.Allocate(blockTag[i])
+		if err != nil {
+			t.Fatalf("failed to allocate '%s'", err)
+		}
+		blockIndex[i] = index
+	}
+
+	buf := make([]byte, bf.Cache.BlockSize)
+	for i := 0; i < 10000; i++ {
+		j := rng.Int() % len(blockIndex)
+		index := blockIndex[j]
+		blockTag[j] = rng.Int() % numTags
+
+		err := bf.Write(blockTag[j], index, buf)
+		if err != nil {
+			t.Fatalf("unexpected error writing to block")
+		}
+
+		if i % 50 == 0 {
+			flushTag := interface{}(rng.Int() % numTags)
+
+			for k := 0; k < len(blockIndex); k++ {
+				bf.Cache.Access(&bf, blockIndex[k], false, func(tag interface{}, _ []byte, found bool) (interface{}, bool, error) {
+					if !found {
+						t.Fatalf("unexpectedly couldn't find block in cache")
+					}
+					if tag != blockTag[k] {
+						t.Fatalf("block had unexpected tag, expected=%d, got=%d", blockTag[k], tag)
+					}
+					if tag == flushTag {
+						blockTag[k] = nil
+					}
+					return tag, false, nil
+				})
+			}
+
+			err := bf.SyncTag(flushTag)
+			if err != nil {
+				t.Fatalf("error flushing tag")
+			}
+
+			for k := 0; k < len(blockIndex); k++ {
+				bf.Cache.Access(&bf, blockIndex[k], false, func(tag interface{}, _ []byte, found bool) (interface{}, bool, error) {
+					if !found {
+						t.Fatalf("unexpectedly couldn't find block in cache")
+					}
+					if tag != blockTag[k] {
+						t.Fatalf("block had unexpected tag, expected=%d, got=%d", blockTag[k], tag)
+					}
+					return tag, false, nil
+				})
+			}
+		}
+	}
+}
+
+func TestOverlay(t *testing.T) {
+	f, err := tempFileCreate()
+	if err != nil {
+		t.Fatalf("unexpected error creating temp file '%s'", err)
+	}
+
+	bfLayer1 := BlockFile{
+		Cache: blockcache.New(200, 32),
+		File:  f,
+	}
+	bfLayer1.Init()
+	defer func() {
+		err := bfLayer1.Close()
+		if err != nil {
+			t.Fatalf("failed to close temp file '%s'", err)
+		}
+	}()
+
+	var roIndexes []BlockIndex
+	for i := 0; i < 10; i++ {
+		index, err := bfLayer1.Allocate(nil)
+		if err != nil {
+			t.Fatalf("failed to allocate block '%s'", err)
+		}
+		roIndexes = append(roIndexes, index)
+	}
+
+	f, err = tempFileCreate()
+	if err != nil {
+		t.Fatalf("unexpected error creating temp file '%s'", err)
+	}
+
+	bfLayer2 := BlockFile{
+		Cache: blockcache.New(200, 32),
+		File:  f,
+	}
+	bfLayer2.Init()
+	defer func() {
+		err := bfLayer2.Close()
+		if err != nil {
+			t.Fatalf("failed to close temp file '%s'", err)
+		}
+	}()
+
+	bf := BlockOverlayAllocator{}
+	err = bf.Init(&bfLayer1, &bfLayer2)
+	if err != nil {
+		t.Fatalf("failed to init overlay allocator '%s'", err)
+	}
+
+	var wrIndexes []BlockIndex
+	for i := 0; i < 10; i++ {
+		index, err := bf.Allocate(nil)
+		if err != nil {
+			t.Fatalf("failed to allocate block '%s'", err)
+		}
+		println(index)
+		wrIndexes = append(wrIndexes, index)
 	}
 }

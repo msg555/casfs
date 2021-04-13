@@ -6,11 +6,13 @@ import (
 )
 
 type Flushable interface {
-	FlushBlock(key interface{}, buf []byte) error
+	FlushBlock(key interface{}, tag interface{}, buf []byte) (interface{}, error)
 }
 
 type cacheVal struct {
-	Buf []byte // Guarded by val.Lock
+ // Guarded by val.Lock
+	Buf []byte
+	Tag interface{}
 
 	// Marks that the cache value is no longer alive. Do to the locking scheme it
 	// is possible a value is no longer good after you retrieve it from the cache
@@ -81,7 +83,7 @@ func (c *BlockCache) deleteValue(val *cacheVal) (bool, error) {
 	if val.DirtyElem != nil {
 		groupFlushable, ok := val.GroupKey.(Flushable)
 		if ok {
-			err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+			_, err := groupFlushable.FlushBlock(val.SubKey, val.Tag, val.Buf)
 			if err != nil {
 				return false, err
 			}
@@ -156,7 +158,7 @@ func (c *BlockCache) evict() error {
 		if val.DirtyElem != nil {
 			groupFlushable, ok := val.GroupKey.(Flushable)
 			if ok {
-				err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+				_, err := groupFlushable.FlushBlock(val.SubKey, val.Tag, val.Buf)
 				if err != nil {
 					val.Lock.Unlock()
 					c.lock.Lock()
@@ -214,10 +216,11 @@ func (c *BlockCache) flushOne() error {
 
 	// Flush the element if dirty
 	groupFlushable := val.GroupKey.(Flushable)
-	err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+	tag, err := groupFlushable.FlushBlock(val.SubKey, val.Tag, val.Buf)
 	if err != nil {
 		return err
 	}
+	val.Tag = tag
 
 	c.lock.Lock()
 	c.dirtyList.Remove(val.DirtyElem)
@@ -227,7 +230,7 @@ func (c *BlockCache) flushOne() error {
 	return nil
 }
 
-func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc func(buf []byte, found bool) (modified bool, err error)) error {
+func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc func(tag interface{}, buf []byte, found bool) (newTag interface{}, modified bool, err error)) error {
 	var val *cacheVal
 	var created bool
 	var err error
@@ -251,11 +254,12 @@ func (c *BlockCache) Access(groupKey, key interface{}, create bool, accessFunc f
 	}
 
 	if val == nil {
-		_, err := accessFunc(nil, false)
+		_, _, err := accessFunc(nil, nil, false)
 		return err
 	}
 
-	modified, err := accessFunc(val.Buf, !created)
+	tag, modified, err := accessFunc(val.Tag, val.Buf, !created)
+	val.Tag = tag
 	if modified {
 		// Mark element dirty
 		c.lock.Lock()
@@ -286,7 +290,8 @@ func (c *BlockCache) Flush(groupKey interface{}, key interface{}) error {
 	}
 
 	groupFlushable := groupKey.(Flushable)
-	err = groupFlushable.FlushBlock(key, val.Buf)
+	tag, err := groupFlushable.FlushBlock(key, val.Tag, val.Buf)
+	val.Tag = tag
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -322,11 +327,12 @@ func (c *BlockCache) FlushGroup(groupKey interface{}) error {
 		}
 
 		// Flush the element if dirty
-		err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+		tag, err := groupFlushable.FlushBlock(val.SubKey, val.Tag, val.Buf)
 		if err != nil {
 			val.Lock.Unlock()
 			return err
 		}
+		val.Tag = tag
 
 		// Remove from dirty list
 		c.lock.Lock()
@@ -364,7 +370,7 @@ func (c *BlockCache) RemoveGroup(groupKey interface{}) error {
 
 		// Flush the element if dirty
 		if groupFlushable != nil {
-			err := groupFlushable.FlushBlock(val.SubKey, val.Buf)
+			_, err := groupFlushable.FlushBlock(val.SubKey, val.Tag, val.Buf)
 			if err != nil {
 				val.Lock.Unlock()
 				return err

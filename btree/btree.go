@@ -60,8 +60,7 @@ type BTree struct {
 	nodeSize int
 
 	// Underlying block store to keep b-tree nodes
-	blocks    []*blockfile.BlockFile
-	forkDepth int
+	blocks    blockfile.BlockAllocator
 }
 
 /*
@@ -90,42 +89,19 @@ func dupBytes(arr []byte) []byte {
 }
 
 // Open a B-tree with a single writable block allocator.
-func (tr *BTree) Open(bf *blockfile.BlockFile) error {
+func (tr *BTree) Open(bf blockfile.BlockAllocator) error {
 	if tr.FanOut%2 == 1 {
 		return errors.New("tree fan out must be even")
 	}
 
 	nodeSize := 4 + tr.MaxKeySize + tr.EntrySize
 	blockSize := 4 + 8*(tr.FanOut+1) + nodeSize*tr.FanOut
-	if bf.Cache.BlockSize < blockSize {
-		return errors.New("insufficiently sized block file")
+	if bf.BlockSize() < blockSize {
+		return errors.New("insufficiently sized block allocator")
 	}
 
 	tr.nodeSize = nodeSize
-	tr.blocks = []*blockfile.BlockFile{bf}
-	tr.forkDepth = 0
-	return nil
-}
-
-// Forks a B-tree to create a new tree where writes are written only to a new
-// separate block file. This forked tree's lifetime must be shorter than its
-// parent as it relies on resources owned and managed by the parent tree.
-func (tr *BTree) ForkFrom(parent *BTree, bf *blockfile.BlockFile) error {
-	if len(parent.blocks)+1 > parent.MaxForkDepth {
-		return errors.New("parent already at maximum fork depth")
-	}
-
-	tr.MaxKeySize = parent.MaxKeySize
-	tr.EntrySize = parent.EntrySize
-	tr.FanOut = parent.FanOut
-	tr.MaxForkDepth = parent.MaxForkDepth
-
-	tr.blocks = make([]*blockfile.BlockFile, len(parent.blocks)+1)
-	copy(tr.blocks, parent.blocks)
-	tr.blocks[len(parent.blocks)] = bf
-
-	tr.nodeSize = parent.nodeSize
-
+	tr.blocks = bf
 	return nil
 }
 
