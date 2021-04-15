@@ -197,7 +197,6 @@ func TestAllocateFree(t *testing.T) {
 				t.Fatalf("allocate should not return 0 unless there is an error")
 			}
 			if int64(len(indexAllocated)) <= ind {
-				println(i, ind)
 				t.Fatalf("allocated index is too large")
 			}
 			if indexAllocated[ind] {
@@ -260,7 +259,7 @@ func TestTags(t *testing.T) {
 			t.Fatalf("unexpected error writing to block")
 		}
 
-		if i % 50 == 0 {
+		if i%50 == 0 {
 			flushTag := interface{}(rng.Int() % numTags)
 
 			for k := 0; k < len(blockIndex); k++ {
@@ -354,7 +353,85 @@ func TestOverlay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to allocate block '%s'", err)
 		}
-		println(index)
 		wrIndexes = append(wrIndexes, index)
+	}
+}
+
+func TestFuzz(t *testing.T) {
+	f, err := tempFileCreate()
+	if err != nil {
+		t.Fatalf("unexpected error creating temp file '%s'", err)
+	}
+
+	blockSize := 20
+	bf := BlockFile{
+		Cache: blockcache.New(10, blockSize),
+		File:  f,
+	}
+	bf.Init()
+	defer func() {
+		err := bf.Close()
+		if err != nil {
+			t.Fatalf("failed to close temp file '%s'", err)
+		}
+	}()
+
+	rng := rand.New(rand.NewSource(555))
+
+	maxBlocks := 20
+	totalBlocks := 0
+	blocks := make([][]byte, maxBlocks+1)
+
+	for i := 0; i < 100000; i++ {
+		switch rng.Int() % 4 {
+		case 0:
+			if totalBlocks < maxBlocks {
+				index, err := bf.Allocate(nil)
+				if err != nil {
+					t.Fatalf("allocate failed '%s'", err)
+				}
+				if index >= BlockIndex(len(blocks)) {
+					t.Fatalf("allocate index unexpectedly high")
+				}
+				if blocks[index] != nil {
+					t.Fatalf("block already allocated")
+				}
+				totalBlocks++
+				blocks[index] = make([]byte, blockSize)
+			}
+		case 1:
+			index := BlockIndex(1 + rng.Int()%maxBlocks)
+			if blocks[index] == nil {
+				continue
+			}
+			err := bf.Free(index)
+			if err != nil {
+				t.Fatalf("failed to free block '%s'", err)
+			}
+			blocks[index] = nil
+			totalBlocks--
+		case 2:
+			index := BlockIndex(1 + rng.Int()%maxBlocks)
+			if blocks[index] == nil {
+				continue
+			}
+			buf, err := bf.Read(index, nil)
+			if err != nil {
+				t.Fatalf("failed to read block '%s'", err)
+			}
+			if bytes.Compare(buf, blocks[index]) != 0 {
+				t.Fatalf("block data does not match expectation")
+			}
+		case 3:
+			index := BlockIndex(1 + rng.Int()%maxBlocks)
+			if blocks[index] == nil {
+				continue
+			}
+			bo.PutUint32(blocks[index][rng.Int()%(blockSize-4+1):], uint32(rng.Int31()))
+			err := bf.Write(nil, index, blocks[index])
+			if err != nil {
+				t.Fatalf("failed to write block '%s'", err)
+			}
+		}
 	}
 }

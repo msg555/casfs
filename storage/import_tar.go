@@ -177,19 +177,23 @@ func (sc *StorageContext) ImportTar(r io.Reader) (*StorageNode, error) {
 
 			switch record.Typeflag {
 			case tar.TypeSymlink:
-				addr, size, err := sc.Cas.Insert(strings.NewReader(record.Linkname))
-				if err != nil {
-					return nil, err
-				}
-				inode.Size = uint64(size)
-				copy(inode.Address[:], addr)
+				/*
+					addr, size, err := sc.Cas.Insert(strings.NewReader(record.Linkname))
+					if err != nil {
+						return nil, err
+					}
+					inode.Size = uint64(size)
+				*/
+				// copy(inode.Address[:], addr)
 			case tar.TypeReg:
-				addr, size, err := sc.Cas.Insert(arch)
-				if err != nil {
-					return nil, err
-				}
-				inode.Size = uint64(size)
-				copy(inode.Address[:], addr)
+				/*
+					addr, size, err := sc.Cas.Insert(arch)
+					if err != nil {
+						return nil, err
+					}
+					inode.Size = uint64(size)
+				*/
+				// copy(inode.Address[:], addr)
 			}
 
 			nd = &importNode{

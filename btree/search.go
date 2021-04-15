@@ -13,7 +13,10 @@ func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
 
 	lo := 0
 	hi := tr.getBlockSize(block) - 1
-	if hi < 0 || hi >= tr.FanOut {
+	if hi < 0 {
+		return 0, false, nil
+	}
+	if hi >= tr.FanOut {
 		return 0, false, errors.New("unexpected block size")
 	}
 	for {
@@ -48,11 +51,16 @@ func (tr *BTree) searchBlock(block []byte, key KeyType) (int, bool, error) {
 // A scan can be resumed starting at a given entry by passing back the offset
 // parameter sent to the callback function.
 func (tr *BTree) Scan(treeIndex TreeIndex, startKey KeyType, entryCallback func(index IndexType, key KeyType, value ValueType) bool) (bool, error) {
+	cache := tr.blocks.GetCache()
+
 	var stackBlocks [][]byte
 	var stackBlockIndexes []TreeIndex
 	var stackIndexes []int
 	for treeIndex != 0 {
-		block, err := tr.readBlock(treeIndex, nil)
+		block := cache.Pool.Get().([]byte)
+		defer cache.Pool.Put(block)
+
+		_, err := tr.blocks.Read(treeIndex, block)
 		if err != nil {
 			return false, err
 		}
@@ -82,12 +90,20 @@ func (tr *BTree) Scan(treeIndex TreeIndex, startKey KeyType, entryCallback func(
 					break
 				}
 
-				block, err := tr.readBlock(childIndex, nil)
+				var block []byte
+				if stackDepth+1 < len(stackBlocks) {
+					block = stackBlocks[stackDepth+1]
+				} else {
+					block = cache.Pool.Get().([]byte)
+					defer cache.Pool.Put(block)
+					stackBlocks = append(stackBlocks, block)
+				}
+
+				_, err := tr.blocks.Read(childIndex, block)
 				if err != nil {
 					return false, err
 				}
 
-				stackBlocks = append(stackBlocks, block)
 				stackBlockIndexes = append(stackBlockIndexes, childIndex)
 				stackIndexes = append(stackIndexes, 0)
 				stackDepth++
@@ -108,7 +124,6 @@ func (tr *BTree) Scan(treeIndex TreeIndex, startKey KeyType, entryCallback func(
 			}
 		}
 
-		stackBlocks = stackBlocks[:stackDepth+1]
 		stackBlockIndexes = stackBlockIndexes[:stackDepth+1]
 		stackIndexes = stackIndexes[:stackDepth+1]
 
@@ -131,37 +146,67 @@ func (tr *BTree) Scan(treeIndex TreeIndex, startKey KeyType, entryCallback func(
 	}
 }
 
-func (tr *BTree) Find(treeIndex TreeIndex, key KeyType) (ValueType, IndexType, error) {
+func (tr *BTree) LowerBound(treeIndex TreeIndex, key KeyType) (KeyType, ValueType, IndexType, error) {
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(block)
+
+	var resultInd IndexType
 	for {
-		for treeIndex == 0 {
-			return nil, 0, nil
+		if treeIndex == 0 {
+			break
 		}
 
-		block, err := tr.readBlock(treeIndex, nil)
+		_, err := tr.blocks.Read(treeIndex, block)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 
 		insertInd, match, err := tr.searchBlock(block, key)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 
+		if insertInd < tr.getBlockSize(block) {
+			resultInd = treeIndex*int64(tr.FanOut) + int64(insertInd)
+		}
 		if match {
-			return tr.getNodeValue(tr.getNodeSlice(block, insertInd)), treeIndex*int64(tr.FanOut) + int64(insertInd), nil
+			break
 		}
 
 		treeIndex = tr.getBlockChild(block, insertInd)
 	}
+	if resultInd == 0 {
+		return nil, nil, 0, nil
+	}
+
+	key, val, err := tr.ByIndex(resultInd)
+	return key, val, resultInd, err
 }
 
-func (tr *BTree) ByIndex(index IndexType) (ValueType, error) {
+func (tr *BTree) Find(treeIndex TreeIndex, key KeyType) (ValueType, IndexType, error) {
+	lkey, lval, lind, err := tr.LowerBound(treeIndex, key)
+	if err != nil {
+		return nil, 0, err
+	}
+	if bytes.Compare(key, lkey) == 0 {
+		return lval, lind, err
+	}
+	return nil, 0, nil
+}
+
+func (tr *BTree) ByIndex(index IndexType) (KeyType, ValueType, error) {
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(block)
+
 	treeIndex := TreeIndex(index / int64(tr.FanOut))
 	pos := int(index % int64(tr.FanOut))
 
-	block, err := tr.readBlock(treeIndex, nil)
+	_, err := tr.blocks.Read(treeIndex, block)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return tr.getNodeValue(tr.getNodeSlice(block, pos)), nil
+	sl := tr.getNodeSlice(block, pos)
+	return dupBytes(tr.getNodeKey(sl)), dupBytes(tr.getNodeValue(sl)), nil
 }

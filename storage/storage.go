@@ -21,13 +21,12 @@ const DIRENT_BTREE_FANOUT = 8
 const HASH_BYTE_LENGTH = 32
 const INODE_BUCKET_NAME = "inodes"
 
-type InodeId = btree.IndexType
-
 type StorageContext struct {
 	Cas         *castore.Castore
 	HashFactory castore.HashFactory
-	BlockFile   blockfile.BlockFile
+	Blocks      blockfile.BlockAllocator
 	DirentTree  btree.BTree
+	FileManager TreeFileManager
 	NodeDB      *bolt.DB
 	BasePath    string
 	Cache       *blockcache.BlockCache
@@ -78,24 +77,25 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 		Cas:         cas,
 		NodeDB:      nodeDB,
 		BasePath:    basePath,
-		BlockFile:   blockfile.BlockFile{},
 		DirentTree: btree.BTree{
-			MaxKeySize:   unix.NAME_MAX,
-			EntrySize:    INODE_SIZE,
-			FanOut:       DIRENT_BTREE_FANOUT,
-			MaxForkDepth: 2,
+			MaxKeySize: unix.NAME_MAX,
+			EntrySize:  INODE_SIZE,
 		},
 		Cache: blockcache.New(65536, 4096),
 	}
 
-	sc.BlockFile.Cache = sc.Cache
-	err = sc.BlockFile.Open(path.Join(basePath, "blocks.bin"), 0666)
+	bf := &blockfile.BlockFile{
+		MetaDataSize: 36,
+		Cache:        sc.Cache,
+	}
+	err = bf.Open(path.Join(basePath, "blocks.bin"), 0666)
 	if err != nil {
 		sc.Close()
 		return nil, err
 	}
+	sc.Blocks = bf
 
-	err = sc.DirentTree.Open(&sc.BlockFile)
+	err = sc.DirentTree.Open(sc.Blocks)
 	if err != nil {
 		sc.Close()
 		return nil, err
@@ -105,7 +105,7 @@ func OpenStorageContext(basePath string) (*StorageContext, error) {
 }
 
 func (sc *StorageContext) Close() error {
-	err := sc.BlockFile.Close()
+	err := sc.Blocks.Close()
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (sc *StorageContext) LookupAddressInode(address []byte) (*InodeData, error)
 }
 
 func (sc *StorageContext) ReadInode(nodeIndex InodeId) (*InodeData, error) {
-	buf, err := sc.DirentTree.ByIndex(nodeIndex)
+	_, buf, err := sc.DirentTree.ByIndex(nodeIndex)
 	if err != nil {
 		return nil, err
 	}

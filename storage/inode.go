@@ -3,28 +3,31 @@ package storage
 import (
 	"encoding/binary"
 
+	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
 )
 
-const INODE_SIZE = 60 + 3*HASH_BYTE_LENGTH
+const INODE_SIZE = 68
 const MODE_HARDLINK_LAYER = uint32(0xFFFFFFFF)
+
+type InodeId = blockfile.BlockIndex
 
 var bo = binary.LittleEndian
 
 type InodeData struct {
-	Mode         uint32
-	Uid          uint32
-	Gid          uint32
-	Dev          uint64
-	Atim         uint64
-	Mtim         uint64
-	Ctim         uint64
-	Size         uint64
-	TreeNode     btree.TreeIndex
-	PathHash     [HASH_BYTE_LENGTH]byte
-	Address      [HASH_BYTE_LENGTH]byte
-	XattrAddress [HASH_BYTE_LENGTH]byte
+	Mode   uint32
+	Uid    uint32
+	Gid    uint32
+	Dev    uint64
+	Atim   uint64
+	Mtim   uint64
+	Ctim   uint64
+	Size   uint64
+	Blocks uint64
+
+	// Block index of tree data if any for this file or directory.
+	TreeNode btree.TreeIndex
 }
 
 func (nd *InodeData) Write(buf []byte, contentHash bool) {
@@ -36,19 +39,11 @@ func (nd *InodeData) Write(buf []byte, contentHash bool) {
 	bo.PutUint64(buf[28:], nd.Mtim)
 	bo.PutUint64(buf[36:], nd.Ctim)
 	bo.PutUint64(buf[44:], nd.Size)
+	bo.PutUint64(buf[52:], nd.Blocks)
 	if contentHash {
-		bo.PutUint64(buf[52:], 0)
+		bo.PutUint64(buf[60:], 0)
 	} else {
-		bo.PutUint64(buf[52:], uint64(nd.TreeNode))
-	}
-	copy(buf[60:], nd.PathHash[:])
-	copy(buf[60+HASH_BYTE_LENGTH:], nd.Address[:])
-	if nd.Mode != MODE_HARDLINK_LAYER || !contentHash {
-		copy(buf[60+2*HASH_BYTE_LENGTH:], nd.XattrAddress[:])
-	} else {
-		for i := 0; i < HASH_BYTE_LENGTH; i++ {
-			buf[60+2*HASH_BYTE_LENGTH+i] = 0
-		}
+		bo.PutUint64(buf[60:], uint64(nd.TreeNode))
 	}
 }
 
@@ -61,10 +56,8 @@ func (nd *InodeData) Read(buf []byte) {
 	nd.Mtim = bo.Uint64(buf[28:])
 	nd.Ctim = bo.Uint64(buf[36:])
 	nd.Size = bo.Uint64(buf[44:])
-	nd.TreeNode = btree.TreeIndex(bo.Uint64(buf[52:]))
-	copy(nd.PathHash[:], buf[60:])
-	copy(nd.Address[:], buf[60+HASH_BYTE_LENGTH:])
-	copy(nd.XattrAddress[:], buf[60+2*HASH_BYTE_LENGTH:])
+	nd.Blocks = bo.Uint64(buf[52:])
+	nd.TreeNode = btree.TreeIndex(bo.Uint64(buf[60:]))
 }
 
 func (nd *InodeData) ToBytes() []byte {
@@ -79,7 +72,7 @@ func InodeFromBytes(buf []byte) *InodeData {
 	return &nd
 }
 
-func InodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *InodeData {
+func InodeFromStat(st *unix.Stat_t) *InodeData {
 	data := InodeData{
 		Mode: st.Mode,
 		Uid:  st.Uid,
@@ -92,8 +85,5 @@ func InodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *Ino
 	if unix.S_ISCHR(data.Mode) || unix.S_ISBLK(data.Mode) {
 		data.Dev = st.Rdev
 	}
-	copy(data.PathHash[:], pathHash)
-	copy(data.Address[:], address)
-	copy(data.XattrAddress[:], xattrAddress)
 	return &data
 }

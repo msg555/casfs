@@ -26,6 +26,7 @@ func blockFileCreate(blockSize int) (*blockfile.BlockFile, error) {
 		Cache: blockcache.New(1000, blockSize),
 		File:  f,
 	}
+	bf.Init()
 	return bf, nil
 }
 
@@ -36,10 +37,9 @@ func TestFuzz(t *testing.T) {
 	}
 
 	tr := BTree{
-		MaxKeySize:   4,
-		EntrySize:    4,
-		FanOut:       4,
-		MaxForkDepth: 2,
+		MaxKeySize: 4,
+		EntrySize:  4,
+		FanOut:     4,
 	}
 	err = tr.Open(bf)
 	if err != nil {
@@ -50,7 +50,10 @@ func TestFuzz(t *testing.T) {
 
 	keyDomain := 1000
 	valDomain := 10000
-	treeRoot := EMPTY_TREE_ROOT
+	treeRoot, err := tr.CreateEmpty(nil)
+	if err != nil {
+		t.Fatalf("unexpected error creating empty tree '%s'", err)
+	}
 
 	data := make(map[string]string)
 	for i := 0; i < 50000; i++ {
@@ -74,9 +77,12 @@ func TestFuzz(t *testing.T) {
 				}
 
 				// ByIndex
-				byIndexVal, err := tr.ByIndex(trInd)
+				byIndexKey, byIndexVal, err := tr.ByIndex(trInd)
 				if err != nil {
 					t.Fatalf("unexpected error with ByIndex: '%s'", err)
+				}
+				if bytes.Compare([]byte(k), byIndexKey) != 0 {
+					t.Fatalf("got unexpected key from ByIndex")
 				}
 				if bytes.Compare([]byte(mpVal), byIndexVal) != 0 {
 					t.Fatalf("got unexpected value from ByIndex")
@@ -88,32 +94,27 @@ func TestFuzz(t *testing.T) {
 			_, ok := data[k]
 			data[k] = v
 
-			if newTreeRoot, err := tr.Insert(treeRoot, []byte(k), []byte(v), false); err != nil {
+			if err := tr.Insert(nil, treeRoot, []byte(k), []byte(v), false); err != nil {
 				if !ok || err != ErrorKeyAlreadyExists {
 					t.Fatalf("unexpected error with Insert: '%s'", err)
 				}
-				if newTreeRoot, err := tr.Insert(treeRoot, []byte(k), []byte(v), true); err != nil {
+				if err := tr.Insert(nil, treeRoot, []byte(k), []byte(v), true); err != nil {
 					t.Fatalf("unexpected error with Insert: '%s'", err)
-				} else {
-					treeRoot = newTreeRoot
 				}
 			} else {
 				if ok {
 					t.Fatalf("expected insert to fail as key already existed")
 				}
-				treeRoot = newTreeRoot
 			}
 		case 2: // Delete
 			_, ok := data[k]
 			if ok {
 				delete(data, k)
 			}
-			if newTreeRoot, err := tr.Delete(treeRoot, []byte(k)); err != nil {
+			if err := tr.Delete(nil, treeRoot, []byte(k)); err != nil {
 				if ok || err != ErrorKeyNotFound {
 					t.Fatalf("unexpected error with Delete: '%s'", err)
 				}
-			} else {
-				treeRoot = newTreeRoot
 			}
 		}
 		if i%100 == 0 {
@@ -144,7 +145,7 @@ func TestFuzz(t *testing.T) {
 				t.Fatal(failMsg)
 			}
 			if count != len(data) {
-				t.Fatalf("unexpected number of elements in tree")
+				t.Fatalf("unexpected number of elements in tree, got=%d, wanted=%d", count, len(data))
 			}
 
 			count = 0
@@ -153,7 +154,7 @@ func TestFuzz(t *testing.T) {
 				first := true
 				done, err := tr.Scan(treeRoot, searchStart, func(_ IndexType, key KeyType, val ValueType) bool {
 					if !first {
-						searchStart = key
+						searchStart = dupBytes(key)
 						return false
 					}
 					first = false
@@ -182,7 +183,7 @@ func TestFuzz(t *testing.T) {
 				t.Fatal(failMsg)
 			}
 			if count != len(data) {
-				t.Fatalf("unexpected number of elements in tree")
+				t.Fatalf("unexpected number of elements in tree, got=%d, wanted=%d", count, len(data))
 			}
 		}
 	}

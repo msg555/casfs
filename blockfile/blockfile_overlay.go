@@ -7,7 +7,7 @@ import (
 )
 
 type BlockOverlayAllocator struct {
-	blockSize int
+	blockSize    int
 	metaDataSize int
 	wrIndexShift BlockIndex
 
@@ -78,32 +78,48 @@ func (bf *BlockOverlayAllocator) Read(index BlockIndex, buf []byte) ([]byte, err
 	if index < bf.wrIndexShift {
 		return bf.roAllocator.Read(index, buf)
 	}
-	return bf.wrAllocator.Read(index - bf.wrIndexShift, buf)
+	return bf.wrAllocator.Read(index-bf.wrIndexShift, buf)
 }
 
 func (bf *BlockOverlayAllocator) ReadAt(index BlockIndex, off, sz int, buf []byte) ([]byte, error) {
 	if index < bf.wrIndexShift {
 		return bf.roAllocator.ReadAt(index, off, sz, buf)
 	}
-	return bf.wrAllocator.ReadAt(index - bf.wrIndexShift, off, sz, buf)
+	return bf.wrAllocator.ReadAt(index-bf.wrIndexShift, off, sz, buf)
 }
 
 func (bf *BlockOverlayAllocator) Write(tag interface{}, index BlockIndex, buf []byte) error {
 	if index < bf.wrIndexShift {
 		return errors.New("cannot write to ro block")
 	}
-	return bf.wrAllocator.Write(tag, index - bf.wrIndexShift, buf)
+	return bf.wrAllocator.Write(tag, index-bf.wrIndexShift, buf)
 }
 
 func (bf *BlockOverlayAllocator) WriteAt(tag interface{}, index BlockIndex, off int, buf []byte) error {
 	if index < bf.wrIndexShift {
 		return errors.New("cannot write to ro block")
 	}
-	return bf.wrAllocator.WriteAt(tag, index - bf.wrIndexShift, off, buf)
+	return bf.wrAllocator.WriteAt(tag, index-bf.wrIndexShift, off, buf)
 }
 
 func (bf *BlockOverlayAllocator) SyncTag(tag interface{}) error {
 	return bf.wrAllocator.SyncTag(tag)
+}
+
+func (bf *BlockOverlayAllocator) AccessBlock(tag interface{}, index BlockIndex, accessFunc func(data []byte) (modified bool, err error)) error {
+	if index < bf.wrIndexShift {
+		return bf.roAllocator.AccessBlock(tag, index, func(meta []byte) (bool, error) {
+			modified, err := accessFunc(meta)
+			if err != nil {
+				return false, err
+			}
+			if modified {
+				return false, errors.New("cannot modify ro block")
+			}
+			return false, nil
+		})
+	}
+	return bf.wrAllocator.AccessBlock(tag, index-bf.wrIndexShift, accessFunc)
 }
 
 func (bf *BlockOverlayAllocator) AccessBlockMeta(index BlockIndex, accessFunc func(meta []byte) (modified bool, err error)) error {
@@ -119,7 +135,7 @@ func (bf *BlockOverlayAllocator) AccessBlockMeta(index BlockIndex, accessFunc fu
 			return false, nil
 		})
 	}
-	return bf.wrAllocator.AccessBlockMeta(index - bf.wrIndexShift, accessFunc)
+	return bf.wrAllocator.AccessBlockMeta(index-bf.wrIndexShift, accessFunc)
 }
 
 func (bf *BlockOverlayAllocator) IsBlockReadOnly(index BlockIndex) bool {

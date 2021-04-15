@@ -10,7 +10,7 @@ type Flushable interface {
 }
 
 type cacheVal struct {
- // Guarded by val.Lock
+	// Guarded by val.Lock
 	Buf []byte
 	Tag interface{}
 

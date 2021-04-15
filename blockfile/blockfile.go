@@ -26,6 +26,7 @@ type BlockAllocator interface {
 	Write(tag interface{}, index BlockIndex, buf []byte) error
 	WriteAt(tag interface{}, index BlockIndex, off int, buf []byte) error
 	SyncTag(tag interface{}) error
+	AccessBlock(tag interface{}, index BlockIndex, accessFunc func(data []byte) (modified bool, err error)) error
 	AccessBlockMeta(index BlockIndex, accessFunc func(meta []byte) (modified bool, err error)) error
 	IsBlockReadOnly(index BlockIndex) bool
 }
@@ -36,13 +37,13 @@ type BlockIndex = int64
 
 type BlockFile struct {
 	MetaDataSize int
-	Cache     *blockcache.BlockCache
-	File      *os.File
+	Cache        *blockcache.BlockCache
+	File         *os.File
 
 	blocksPerMeta int
 
-	allocLock sync.Mutex
-	tagLock sync.Mutex
+	allocLock      sync.Mutex
+	tagLock        sync.Mutex
 	tagDirtyBlocks map[interface{}]map[BlockIndex]struct{}
 }
 
@@ -51,6 +52,13 @@ func readAtFull(file *os.File, offset int64, buf []byte) error {
 	for read < len(buf) {
 		n, err := file.ReadAt(buf[read:], int64(offset)+int64(read))
 		if err != nil {
+			if err == io.EOF {
+				read += n
+				for i := read; i < len(buf); i++ {
+					buf[i] = 0
+				}
+				return nil
+			}
 			return err
 		}
 		read += n
@@ -92,7 +100,7 @@ func (bf *BlockFile) Init() {
 	} else {
 		bf.blocksPerMeta = bf.Cache.BlockSize / bf.MetaDataSize
 	}
-  bf.tagDirtyBlocks = make(map[interface{}]map[BlockIndex]struct{})
+	bf.tagDirtyBlocks = make(map[interface{}]map[BlockIndex]struct{})
 }
 
 // Closes the underlying file handle.
@@ -105,11 +113,11 @@ func (bf *BlockFile) Close() error {
 	return bf.File.Close()
 }
 
-func (bf * BlockFile) GetBlockSize() int {
+func (bf *BlockFile) GetBlockSize() int {
 	return bf.Cache.BlockSize
 }
 
-func (bf * BlockFile) GetMetaDataSize() int {
+func (bf *BlockFile) GetMetaDataSize() int {
 	return bf.MetaDataSize
 }
 
@@ -121,7 +129,7 @@ func (bf *BlockFile) GetNumBlocks() (BlockIndex, error) {
 	return BlockIndex(bo.Uint64(buf) + 1), nil
 }
 
-func (bf * BlockFile) GetCache() *blockcache.BlockCache {
+func (bf *BlockFile) GetCache() *blockcache.BlockCache {
 	return bf.Cache
 }
 
@@ -170,7 +178,7 @@ func (bf *BlockFile) Allocate(tag interface{}) (BlockIndex, error) {
 		result := int64(bo.Uint64(buf[(lo-1)*8:]))
 		if freeHead == 0 && lo == 2 {
 			result++
-			if bf.blocksPerMeta != 0 && result % int64(bf.blocksPerMeta) == 0 {
+			if bf.blocksPerMeta != 0 && result%int64(bf.blocksPerMeta) == 0 {
 				// Do not assign new blocks to a meta block index.
 				result++
 			}
@@ -392,12 +400,32 @@ func (bf *BlockFile) SyncTag(tag interface{}) error {
 	return bf.SyncTag(bf)
 }
 
+func (bf *BlockFile) AccessBlock(tag interface{}, index BlockIndex, accessFunc func(data []byte) (bool, error)) error {
+	return bf.Cache.Access(bf, index, true, func(prevTag interface{}, data []byte, found bool) (interface{}, bool, error) {
+		if !found {
+			err := readAtFull(bf.File, index*int64(bf.Cache.BlockSize), data)
+			if err != nil {
+				return prevTag, false, err
+			}
+		}
+		modified, err := accessFunc(data)
+		if err != nil {
+			return prevTag, false, err
+		}
+		if modified {
+			bf.updateCacheTag(index, prevTag, tag)
+			return tag, true, nil
+		}
+		return prevTag, false, nil
+	})
+}
+
 func (bf *BlockFile) AccessBlockMeta(index BlockIndex, accessFunc func(meta []byte) (bool, error)) error {
 	if index <= 0 {
 		panic("no metadata for index")
 	}
 
-	metaIndex := (index + int64(bf.blocksPerMeta - 1)) / int64(bf.blocksPerMeta) * int64(bf.blocksPerMeta)
+	metaIndex := (index + int64(bf.blocksPerMeta-1)) / int64(bf.blocksPerMeta) * int64(bf.blocksPerMeta)
 	return bf.Cache.Access(bf, metaIndex, true, func(_ interface{}, data []byte, found bool) (interface{}, bool, error) {
 		if !found {
 			err := readAtFull(bf.File, metaIndex*int64(bf.Cache.BlockSize), data)
@@ -405,8 +433,8 @@ func (bf *BlockFile) AccessBlockMeta(index BlockIndex, accessFunc func(meta []by
 				return bf, false, err
 			}
 		}
-		metaOffset := bf.MetaDataSize * int(index % int64(bf.blocksPerMeta))
-		updated, err := accessFunc(data[metaOffset:metaOffset+bf.MetaDataSize])
+		metaOffset := bf.MetaDataSize * int(index%int64(bf.blocksPerMeta))
+		updated, err := accessFunc(data[metaOffset : metaOffset+bf.MetaDataSize])
 		if err != nil {
 			return bf, false, err
 		}
@@ -416,4 +444,32 @@ func (bf *BlockFile) AccessBlockMeta(index BlockIndex, accessFunc func(meta []by
 
 func (bf *BlockFile) IsBlockReadOnly(index BlockIndex) bool {
 	return false
+}
+
+func Duplicate(tag interface{}, bf BlockAllocator, index BlockIndex, onlyIfReadOnly bool) (BlockIndex, error) {
+	if onlyIfReadOnly && !bf.IsBlockReadOnly(index) {
+		return index, nil
+	}
+	newIndex, err := bf.Allocate(tag)
+	if err != nil {
+		return 0, err
+	}
+
+	cache := bf.GetCache()
+	buf := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(buf)
+
+	_, err = bf.Read(index, buf)
+	if err != nil {
+		bf.Free(newIndex)
+		return 0, err
+	}
+
+	err = bf.Write(tag, newIndex, buf)
+	if err != nil {
+		bf.Free(newIndex)
+		return 0, err
+	}
+
+	return newIndex, nil
 }

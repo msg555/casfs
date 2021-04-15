@@ -1,42 +1,61 @@
 package btree
 
 import (
-	_errors "errors"
-
-	"github.com/go-errors/errors"
+	"errors"
 )
 
-var ErrorKeyNotFound = _errors.New("key not found")
+var ErrorKeyNotFound = errors.New("key not found")
+var ErrorRootImmutable = errors.New("root block is immutable")
 
-func (tr *BTree) Delete(treeIndex TreeIndex, key KeyType) (TreeIndex, error) {
-	if key == nil {
-		return 0, errors.New("key cannot be nil")
+func (tr *BTree) Delete(tag interface{}, treeIndex TreeIndex, key KeyType) error {
+	if tr.blocks.IsBlockReadOnly(treeIndex) {
+		return ErrorRootImmutable
+	}
+	err := tr.validateKey(key)
+	if err != nil {
+		return err
 	}
 
-	block, _, _, err := tr.deleteHelper(treeIndex, key)
+	block, _, _, err := tr.deleteHelper(tag, treeIndex, key)
+	defer tr.blocks.GetCache().Pool.Put(block)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	if tr.getBlockSize(block) == 0 {
-		// Root has emptied out, delete root node
-		if err := tr.freeBlock(treeIndex); err != nil {
-			return 0, err
+		// Root has emptied out, copy child into root node and delete child.
+		childIndex := tr.getBlockChild(block, 0)
+
+		_, err = tr.blocks.Read(childIndex, block)
+		if err != nil {
+			return err
 		}
-		return tr.getBlockChild(block, 0), nil
+
+		err = tr.blocks.Write(tag, treeIndex, block)
+		if err != nil {
+			return err
+		}
+
+		if tr.blocks.IsBlockReadOnly(childIndex) {
+			return nil
+		}
+		return tr.blocks.Free(childIndex)
 	}
 
-	return tr.copyUpBlock(treeIndex, block)
+	return tr.blocks.Write(tag, treeIndex, block)
 }
 
-func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType, ValueType, error) {
+func (tr *BTree) deleteHelper(tag interface{}, treeIndex TreeIndex, key KeyType) ([]byte, KeyType, ValueType, error) {
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+
 	if treeIndex == 0 {
-		return nil, nil, nil, ErrorKeyNotFound
+		return block, nil, nil, ErrorKeyNotFound
 	}
 
-	block, err := tr.readBlock(treeIndex, nil)
+	_, err := tr.blocks.Read(treeIndex, block)
 	if err != nil {
-		return nil, nil, nil, err
+		return block, nil, nil, err
 	}
 
 	var insertInd int
@@ -51,7 +70,7 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 	} else {
 		insertInd, match, err = tr.searchBlock(block, key)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 	}
 
@@ -79,25 +98,27 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 			return block, deletedKey, deletedValue, nil
 		}
 
-		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(childTree, nil)
+		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(tag, childTree, nil)
+		defer cache.Pool.Put(childBlock)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 
 		tr.setNode(tr.getNodeSlice(block, insertInd), deletedKey, deletedValue)
 	} else {
-		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(childTree, key)
+		childBlock, deletedKey, deletedValue, err = tr.deleteHelper(tag, childTree, key)
+		defer cache.Pool.Put(childBlock)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 	}
 
 	childBlockSize := tr.getBlockSize(childBlock)
 	if childBlockSize*2 >= tr.FanOut {
 		// Child size is fine
-		childTree, err := tr.copyUpBlock(childTree, childBlock)
+		childTree, err := tr.copyUpBlock(tag, childTree, childBlock)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 
 		tr.setBlockChild(block, insertInd, childTree)
@@ -110,9 +131,13 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 		sibIndex = insertInd + 1
 	}
 	sibTree := tr.getBlockChild(block, sibIndex)
-	sibBlock, err := tr.readBlock(sibTree, nil)
+
+	sibBlock := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(sibBlock)
+
+	_, err = tr.blocks.Read(sibTree, sibBlock)
 	if err != nil {
-		return nil, nil, nil, err
+		return block, nil, nil, err
 	}
 	sibBlockSize := tr.getBlockSize(sibBlock)
 
@@ -150,10 +175,10 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 		sibBlockSize = (len(nodeKeys) - 1) / 2
 		childBlockSize = len(nodeKeys) - 1 - sibBlockSize
 
-		// Copy values back into blocks
-		sibBlock = tr.blocks[0].Cache.Pool.Get().([]byte)
-		defer tr.blocks[0].Cache.Pool.Put(sibBlock)
+		sibBlock = cache.Pool.Get().([]byte)
+		defer cache.Pool.Put(sibBlock)
 
+		// Copy values back into blocks
 		tr.setBlockSize(sibBlock, sibBlockSize)
 		for i := 0; i <= sibBlockSize; i++ {
 			tr.setBlockChild(sibBlock, i, childTrees[i])
@@ -162,8 +187,8 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 			}
 		}
 
-		childBlock = tr.blocks[0].Cache.Pool.Get().([]byte)
-		defer tr.blocks[0].Cache.Pool.Put(childBlock)
+		childBlock = cache.Pool.Get().([]byte)
+		defer cache.Pool.Put(childBlock)
 
 		tr.setBlockSize(childBlock, childBlockSize)
 		for i := 0; i <= childBlockSize; i++ {
@@ -173,14 +198,14 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 			}
 		}
 
-		sibTree, err = tr.copyUpBlock(sibTree, sibBlock)
+		sibTree, err = tr.copyUpBlock(tag, sibTree, sibBlock)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 
-		childTree, err = tr.copyUpBlock(childTree, childBlock)
+		childTree, err = tr.copyUpBlock(tag, childTree, childBlock)
 		if err != nil {
-			return nil, nil, nil, err
+			return block, nil, nil, err
 		}
 
 		tr.setNode(tr.getNodeSlice(block, sibIndex), nodeKeys[sibBlockSize], nodeValues[sibBlockSize])
@@ -200,9 +225,9 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 	}
 	tr.setBlockSize(sibBlock, sibBlockSize+childBlockSize+1)
 
-	sibTree, err = tr.copyUpBlock(sibTree, sibBlock)
+	sibTree, err = tr.copyUpBlock(tag, sibTree, sibBlock)
 	if err != nil {
-		return nil, nil, nil, err
+		return block, nil, nil, err
 	}
 
 	for i := sibIndex; i+1 < blockSize; i++ {
@@ -212,4 +237,33 @@ func (tr *BTree) deleteHelper(treeIndex TreeIndex, key KeyType) ([]byte, KeyType
 	tr.setBlockSize(block, blockSize-1)
 
 	return block, deletedKey, deletedValue, nil
+}
+
+func (tr *BTree) FreeTree(treeIndex TreeIndex, ignoreReadOnly bool) error {
+	if tr.blocks.IsBlockReadOnly(treeIndex) {
+		if ignoreReadOnly {
+			return nil
+		}
+		return errors.New("attempt to free read only block")
+	}
+
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(block)
+
+	_, err := tr.blocks.Read(treeIndex, block)
+	if err != nil {
+		return err
+	}
+
+	numBlocks := tr.getBlockSize(block)
+	for i := 0; i <= numBlocks; i++ {
+		childIndex := tr.getBlockChild(block, i)
+		if childIndex != 0 {
+			if err := tr.FreeTree(childIndex, ignoreReadOnly); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

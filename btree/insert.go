@@ -6,43 +6,65 @@ import (
 
 var ErrorKeyAlreadyExists = errors.New("key already exists")
 
-func (tr *BTree) Insert(treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) (TreeIndex, error) {
-	err := tr.validateKeyValue(key, value)
+func (tr *BTree) Insert(tag interface{}, treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) error {
+	if tr.blocks.IsBlockReadOnly(treeIndex) {
+		return ErrorRootImmutable
+	}
+	err := tr.validateKey(key)
 	if err != nil {
-		return 0, err
+		return err
+	}
+	err = tr.validateValue(value)
+	if err != nil {
+		return err
 	}
 
-	var tr1 TreeIndex
-	var tr2 TreeIndex
-
-	if treeIndex != 0 {
-		tr1, tr2, key, value, err = tr.insertHelper(treeIndex, key, value, overwrite)
-		if err != nil {
-			return 0, err
-		}
-		if tr2 == 0 {
-			return tr1, nil
-		}
+	tr1, tr2, key, value, err := tr.insertHelper(tag, treeIndex, key, value, overwrite)
+	if err != nil {
+		return err
+	}
+	if tr1 != treeIndex {
+		panic("root changed unexpectedly")
+	}
+	if tr2 == 0 {
+		return nil
 	}
 
-	// Need to create new root node.
-	block := tr.blocks[0].Cache.Pool.Get().([]byte)
-	defer tr.blocks[0].Cache.Pool.Put(block)
+	// Need to create new root node. Copy old root node to new block and make root
+	// node the new root with two children.
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(block)
+
+	_, err = tr.blocks.Read(treeIndex, block)
+	if err != nil {
+		return err
+	}
+
+	newIndex, err := tr.blocks.Allocate(tag)
+	if err != nil {
+		return err
+	}
+
+	err = tr.blocks.Write(tag, newIndex, block)
+	if err != nil {
+		return err
+	}
 
 	tr.setBlockSize(block, 1)
-	tr.setBlockChild(block, 0, tr1)
+	tr.setBlockChild(block, 0, newIndex)
 	tr.setBlockChild(block, 1, tr2)
 	tr.setNode(tr.getNodeSlice(block, 0), key, value)
 
-	treeIndex, err = tr.newBlock(block)
-	if err != nil {
-		return 0, err
-	}
-	return treeIndex, nil
+	return tr.blocks.Write(tag, treeIndex, block)
 }
 
-func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) (TreeIndex, TreeIndex, KeyType, ValueType, error) {
-	block, err := tr.readBlock(treeIndex, nil)
+func (tr *BTree) insertHelper(tag interface{}, treeIndex TreeIndex, key KeyType, value ValueType, overwrite bool) (TreeIndex, TreeIndex, KeyType, ValueType, error) {
+	cache := tr.blocks.GetCache()
+	block := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(block)
+
+	_, err := tr.blocks.Read(treeIndex, block)
 	if err != nil {
 		return 0, 0, nil, nil, err
 	}
@@ -59,7 +81,7 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 		}
 
 		tr.setNode(tr.getNodeSlice(block, insertInd), key, value)
-		treeIndex, err = tr.copyUpBlock(treeIndex, block)
+		treeIndex, err = tr.copyUpBlock(tag, treeIndex, block)
 		if err != nil {
 			return 0, 0, nil, nil, err
 		}
@@ -73,7 +95,7 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 	// Continue inserting down the tree if needed.
 	childTree := tr.getBlockChild(block, insertInd)
 	if childTree != 0 {
-		tr1, tr2, key, value, err = tr.insertHelper(childTree, key, value, overwrite)
+		tr1, tr2, key, value, err = tr.insertHelper(tag, childTree, key, value, overwrite)
 		if err != nil {
 			return 0, 0, nil, nil, err
 		}
@@ -82,7 +104,7 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 			// Insert into child was clean
 			tr.setBlockChild(block, insertInd, tr1)
 
-			treeIndex, err = tr.copyUpBlock(treeIndex, block)
+			treeIndex, err = tr.copyUpBlock(tag, treeIndex, block)
 			if err != nil {
 				return 0, 0, nil, nil, err
 			}
@@ -110,7 +132,7 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 
 		tr.setBlockSize(block, blockSize+1)
 
-		treeIndex, err = tr.copyUpBlock(treeIndex, block)
+		treeIndex, err = tr.copyUpBlock(tag, treeIndex, block)
 		if err != nil {
 			return 0, 0, nil, nil, err
 		}
@@ -136,11 +158,11 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 		}
 	}
 
-	blockA := tr.blocks[0].Cache.Pool.Get().([]byte)
-	defer tr.blocks[0].Cache.Pool.Put(blockA)
+	blockA := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(blockA)
 
-	blockB := tr.blocks[0].Cache.Pool.Get().([]byte)
-	defer tr.blocks[0].Cache.Pool.Put(blockB)
+	blockB := cache.Pool.Get().([]byte)
+	defer cache.Pool.Put(blockB)
 
 	newBlockSize := tr.FanOut / 2
 	tr.setBlockSize(blockA, newBlockSize)
@@ -156,24 +178,30 @@ func (tr *BTree) insertHelper(treeIndex TreeIndex, key KeyType, value ValueType,
 	}
 
 	// Otherwise we will have to split our own node as well
-	treeIndexA, err := tr.copyUpBlock(treeIndex, blockA)
+	treeIndexA, err := tr.copyUpBlock(tag, treeIndex, blockA)
 	if err != nil {
 		return 0, 0, nil, nil, err
 	}
 
-	treeIndexB, err := tr.newBlock(blockB)
+	treeIndexB, err := tr.blocks.Allocate(tr)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+	err = tr.blocks.Write(tr, treeIndexB, blockB)
 	if err != nil {
 		return 0, 0, nil, nil, err
 	}
 
-	return treeIndexA, treeIndexB, nodeKeys[newBlockSize], nodeValues[newBlockSize], nil
+	return treeIndexA, treeIndexB, dupBytes(nodeKeys[newBlockSize]), dupBytes(nodeValues[newBlockSize]), nil
 }
 
-func (tr *BTree) WriteRecords(data map[string]ValueType) (TreeIndex, error) {
-	treeNode := TreeIndex(0)
+func (tr *BTree) WriteRecords(tag interface{}, data map[string]ValueType) (TreeIndex, error) {
+	treeNode, err := tr.CreateEmpty(tag)
+	if err != nil {
+		return 0, err
+	}
 	for key, value := range data {
-		var err error
-		treeNode, err = tr.Insert(treeNode, KeyType(key), value, false)
+		err := tr.Insert(tag, treeNode, KeyType(key), value, false)
 		if err != nil {
 			return 0, err
 		}

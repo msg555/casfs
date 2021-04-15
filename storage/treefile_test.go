@@ -1,91 +1,95 @@
 package storage
 
 import (
-	"bufio"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"testing"
 
 	"github.com/msg555/ctrfs/blockcache"
+	"github.com/msg555/ctrfs/blockfile"
 )
 
-func createTempFile() (string, error) {
+func blockFileCreate(cache *blockcache.BlockCache) (blockfile.BlockAllocator, error) {
 	f, err := ioutil.TempFile("", "ctrfs-test")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	err = f.Close()
+	err = os.Remove(f.Name())
 	if err != nil {
-		return "", err
+		f.Close()
+		return nil, err
 	}
-	return f.Name(), nil
+	bf := blockfile.BlockFile{
+		Cache: cache,
+		File:  f,
+	}
+	bf.Init()
+	return &bf, nil
 }
 
-func fillPath(path string, length int) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0666)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	x := byte(0)
-	w := bufio.NewWriter(f)
-	defer w.Flush()
-
+func fillPath(t *testing.T, tf *TreeFile, length int) {
+	buf := make([]byte, length)
 	for i := 0; i < length; i++ {
-		err = w.WriteByte(x)
-		if err != nil {
-			return err
-		}
-		x++
+		buf[i] = byte(i)
 	}
-
-	return nil
+	n, err := tf.WriteAt(buf, 0)
+	if err != nil {
+		t.Fatalf("failed writing data '%s'", err)
+	}
+	if n != length {
+		t.Fatal("wrote unexpected number of bytes")
+	}
 }
 
 func TestReadWrite(t *testing.T) {
-	srcPath, err := createTempFile()
+	cache := blockcache.New(20, 4096)
+	bf1, err := blockFileCreate(cache)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error creating block file '%s'", err)
 	}
-	defer os.Remove(srcPath)
+	defer bf1.Close()
 
-	err = fillPath(srcPath, 10000)
+	tm1 := TreeFileManager{}
+	tm1.Init(bf1, &NullInodeMap{})
+
+	tf1, err := tm1.NewFile(&InodeData{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("error creating new file '%s'", err)
+	}
+	fillPath(t, tf1, 10000)
+
+	if tf1.GetInode().Size != 10000 {
+		t.Fatal("unexpected file size after write")
 	}
 
-	dstPath, err := createTempFile()
+	bf2, err := blockFileCreate(cache)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error creating block file '%s'", err)
 	}
-	defer os.Remove(dstPath)
+	defer bf2.Close()
 
-	cache := blockcache.New(128, 4096)
+	bfOverlay := &blockfile.BlockOverlayAllocator{}
+	bfOverlay.Init(bf1, bf2)
+	defer bfOverlay.Close()
 
-	st, err := os.Stat(srcPath)
+	imap := InodeTreeMap{}
+	err = imap.Init(bfOverlay)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error creating inode map '%s'", err)
 	}
 
-	srcInode := InodeData{
-		Size: uint64(st.Size()),
-	}
+	tm2 := TreeFileManager{}
+	tm2.Init(bfOverlay, &imap)
 
-	srcOverlay, err := OpenROFileOverlay(srcPath, &srcInode, cache, "cas://1234")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srcOverlay.Close()
-
-	f, err := OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
+	tf2, err := tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	off := 4040
 	buf := make([]byte, 100)
-	_, err = f.ReadAt(buf, int64(off))
+	_, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,13 +102,13 @@ func TestReadWrite(t *testing.T) {
 
 	off = 7000
 	msg := []byte("hello world")
-	_, err = f.WriteAt(msg, int64(off))
+	_, err = tf2.WriteAt(msg, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	off -= 10
-	_, err = f.ReadAt(buf, int64(off))
+	_, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,17 +123,17 @@ func TestReadWrite(t *testing.T) {
 		}
 	}
 
-	err = f.Close()
+	err = tf2.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	f, err = OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
+	tf2, err = tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = f.ReadAt(buf, int64(off))
+	_, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,47 +150,53 @@ func TestReadWrite(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	srcPath, err := createTempFile()
+	cache := blockcache.New(20, 4096)
+	bf1, err := blockFileCreate(cache)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error creating block file '%s'", err)
 	}
-	defer os.Remove(srcPath)
+	defer bf1.Close()
 
-	err = fillPath(srcPath, 10000)
+	tm1 := TreeFileManager{}
+	tm1.Init(bf1, &NullInodeMap{})
+
+	tf1, err := tm1.NewFile(&InodeData{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("error creating new file '%s'", err)
+	}
+	fillPath(t, tf1, 10000)
+
+	if tf1.GetInode().Size != 10000 {
+		t.Fatal("unexpected file size after write")
 	}
 
-	dstPath, err := createTempFile()
+	bf2, err := blockFileCreate(cache)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error creating block file '%s'", err)
 	}
-	defer os.Remove(dstPath)
+	defer bf2.Close()
 
-	cache := blockcache.New(128, 4096)
+	bfOverlay := &blockfile.BlockOverlayAllocator{}
+	bfOverlay.Init(bf1, bf2)
+	defer bfOverlay.Close()
 
-	st, err := os.Stat(srcPath)
+	imap := InodeTreeMap{}
+	err = imap.Init(bfOverlay)
 	if err != nil {
-		t.Fatal(err)
-	}
-	srcInode := InodeData{
-		Size: uint64(st.Size()),
+		t.Fatalf("unexpected error creating inode map '%s'", err)
 	}
 
-	srcOverlay, err := OpenROFileOverlay(srcPath, &srcInode, cache, "cas://1234")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srcOverlay.Close()
+	tm2 := TreeFileManager{}
+	tm2.Init(bfOverlay, &imap)
 
-	f, err := OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
+	tf2, err := tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	off := 9950
 	buf := make([]byte, 100)
-	n, err := f.ReadAt(buf, int64(off))
+	n, err := tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,11 +209,11 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 
-	f.UpdateInode(func(inodeData *InodeData) error {
+	tf2.UpdateInode(func(inodeData *InodeData) error {
 		inodeData.Size = 5000
 		return nil
 	})
-	n, err = f.ReadAt(buf, int64(off))
+	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +222,7 @@ func TestTruncate(t *testing.T) {
 	}
 
 	off = 4950
-	n, err = f.ReadAt(buf, int64(off))
+	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,12 +236,12 @@ func TestTruncate(t *testing.T) {
 	}
 
 	extraData := []byte("hellolookatme")
-	_, err = f.WriteAt(extraData, 10000)
+	_, err = tf2.WriteAt(extraData, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	f.UpdateInode(func(inodeData *InodeData) error {
+	tf2.UpdateInode(func(inodeData *InodeData) error {
 		if inodeData.Size != uint64(10000+len(extraData)) {
 			t.Fatal("file size did not increase with write at")
 		}
@@ -239,7 +249,7 @@ func TestTruncate(t *testing.T) {
 		return nil
 	})
 	off = 9950
-	n, err = f.ReadAt(buf, int64(off))
+	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,17 +262,17 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 
-	err = f.Close()
+	err = tf2.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	f, err = OpenFileOverlay(srcOverlay, dstPath, 0666, cache)
+	tf2, err = tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	n, err = f.ReadAt(buf, int64(off))
+	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,12 +285,12 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 
-	f.UpdateInode(func(inodeData *InodeData) error {
+	tf2.UpdateInode(func(inodeData *InodeData) error {
 		inodeData.Size = 20000
 		return nil
 	})
 
-	n, err = f.ReadAt(buf, int64(off))
+	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +299,8 @@ func TestTruncate(t *testing.T) {
 	}
 	for i := 0; i < n; i++ {
 		if buf[i] != 0 {
+			println(i)
+			fmt.Println(buf)
 			t.Fatal("unexpected data read")
 		}
 	}

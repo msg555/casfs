@@ -36,9 +36,6 @@ type KeyValuePair struct {
 	Value ValueType
 }
 
-// Can be used to represent an empty tree, does not allocate any blocks.
-const EMPTY_TREE_ROOT TreeIndex = 0
-
 // Represents a B-tree structure. Set the public variables then call Init().
 // You can then start querying or writing records to the tree.
 type BTree struct {
@@ -49,18 +46,15 @@ type BTree struct {
 	EntrySize int
 
 	// The number of keys stored at each B-tree node. Each node has up to FanOut+1
-	// child nodes. FanOut must be set to an even number.
+	// child nodes. FanOut must be set to an even number. Set FanOut to 0 to have
+	// it automatically set to the largest possible when calling Open().
 	FanOut int
-
-	// The maximum depth this tree can be forked. In practice this will be 2 when
-	// used in ctrfs.
-	MaxForkDepth int
 
 	// Number of bytes in total for an entry
 	nodeSize int
 
 	// Underlying block store to keep b-tree nodes
-	blocks    blockfile.BlockAllocator
+	blocks blockfile.BlockAllocator
 }
 
 /*
@@ -94,73 +88,61 @@ func (tr *BTree) Open(bf blockfile.BlockAllocator) error {
 		return errors.New("tree fan out must be even")
 	}
 
+	fanOut := tr.FanOut
 	nodeSize := 4 + tr.MaxKeySize + tr.EntrySize
-	blockSize := 4 + 8*(tr.FanOut+1) + nodeSize*tr.FanOut
-	if bf.BlockSize() < blockSize {
+	if fanOut == 0 {
+		fanOut = (bf.GetBlockSize() - 12) / (8 + nodeSize)
+		fanOut = fanOut &^ 1
+		if fanOut <= 0 {
+			return errors.New("insufficiently sized block allocator")
+		}
+	}
+	blockSize := 12 + (8+nodeSize)*fanOut
+	if bf.GetBlockSize() < blockSize {
 		return errors.New("insufficiently sized block allocator")
 	}
 
+	tr.FanOut = fanOut
 	tr.nodeSize = nodeSize
 	tr.blocks = bf
 	return nil
 }
 
-func (tr *BTree) validateKeyValue(key KeyType, value ValueType) error {
+func (tr *BTree) validateKey(key KeyType) error {
 	if len(key) == 0 {
-		return errors.New("key length too small")
+		return errors.New("empty key")
 	}
 	if len(key) > tr.MaxKeySize {
 		return errors.New("key length too long")
 	}
+	return nil
+}
+
+func (tr *BTree) validateValue(value ValueType) error {
 	if len(value) != tr.EntrySize {
 		return errors.New("value size incorrect")
 	}
 	return nil
 }
 
-func (tr *BTree) readBlock(index TreeIndex, buf []byte) ([]byte, error) {
-	blockIndex := index / TreeIndex(tr.MaxForkDepth)
-	blockForkDepth := index % TreeIndex(tr.MaxForkDepth)
-	if blockForkDepth >= TreeIndex(len(tr.blocks)) {
-		return nil, errors.New("invalid fork depth for current tree")
-	}
-	return tr.blocks[blockForkDepth].Read(blockIndex, buf)
-}
-
-func (tr *BTree) freeBlock(treeIndex TreeIndex) error {
-	blockIndex := treeIndex / TreeIndex(tr.MaxForkDepth)
-	blockForkDepth := treeIndex % TreeIndex(tr.MaxForkDepth)
-	if blockForkDepth+1 == TreeIndex(len(tr.blocks)) {
-		return tr.blocks[blockForkDepth].Free(blockIndex)
-	}
-	return nil
-}
-
-func (tr *BTree) newBlock(block []byte) (TreeIndex, error) {
-	newIndex, err := tr.blocks[len(tr.blocks)-1].Allocate()
-	if err != nil {
-		return 0, err
-	}
-	err = tr.blocks[len(tr.blocks)-1].Write(newIndex, block)
-	if err != nil {
-		return 0, err
-	}
-	return newIndex*TreeIndex(tr.MaxForkDepth) + TreeIndex(len(tr.blocks)-1), nil
-}
-
-func (tr *BTree) copyUpBlock(index TreeIndex, block []byte) (TreeIndex, error) {
+func (tr *BTree) copyUpBlock(tag interface{}, index TreeIndex, block []byte) (TreeIndex, error) {
+	var err error
 	if tr.getBlockSize(block) == 0 {
 		return 0, errors.New("cannot save block with size 0")
 	}
-	blockForkDepth := index % TreeIndex(tr.MaxForkDepth)
-	if blockForkDepth+1 == TreeIndex(len(tr.blocks)) {
-		blockIndex := index / TreeIndex(tr.MaxForkDepth)
-		if err := tr.blocks[blockForkDepth].Write(blockIndex, block); err != nil {
+
+	if tr.blocks.IsBlockReadOnly(index) {
+		index, err = tr.blocks.Allocate(tag)
+		if err != nil {
 			return 0, err
 		}
-		return index, nil
 	}
-	return tr.newBlock(block)
+
+	err = tr.blocks.Write(tag, index, block)
+	if err != nil {
+		return 0, err
+	}
+	return index, nil
 }
 
 func (tr *BTree) getBlockSize(block []byte) int {
@@ -206,4 +188,8 @@ func (tr *BTree) setNode(node []byte, key KeyType, value ValueType) {
 	bo.PutUint32(node, uint32(len(key)))
 	copy(node[4:], key)
 	copy(node[4+tr.MaxKeySize:], value)
+}
+
+func (tr *BTree) CreateEmpty(tag interface{}) (TreeIndex, error) {
+	return tr.blocks.Allocate(tag)
 }

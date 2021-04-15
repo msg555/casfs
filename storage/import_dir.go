@@ -22,7 +22,7 @@ type dirImportContext struct {
 // Allocate a new inode and return a StorageNode to represent it.
 func (dc *dirImportContext) CreateStorageNodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *importNode {
 	nd := &importNode{
-		Inode: InodeFromStat(pathHash, address, xattrAddress, st),
+		Inode: InodeFromStat(st),
 	}
 	copy(nd.NodeAddress[:], dc.Storage.computeNodeAddress(nd.Inode))
 	return nd

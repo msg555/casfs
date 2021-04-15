@@ -38,8 +38,8 @@ func validatePathName(name string) bool {
 }
 
 func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap interface{}) (*StorageNode, error) {
-	inodeMap := InodeMap{}
-	inodeMap.Init()
+	// inodeMap := InodeMap{}
+	// inodeMap.Init()
 	var linkedNodes [][]importNodeLocation
 
 	for it := reflect.ValueOf(nodeMap).MapRange(); it.Next(); {
@@ -50,9 +50,12 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 		sort.Slice(nd.SeenLocations, func(i, j int) bool {
 			return nd.SeenLocations[i].Path < nd.SeenLocations[j].Path
 		})
-		for _, loc := range nd.SeenLocations[1:] {
-			inodeMap.Map[loc.EdgeIndex] = nd.SeenLocations[0].EdgeIndex
-		}
+		/*
+			TODO
+			for _, loc := range nd.SeenLocations[1:] {
+				inodeMap.Map[loc.EdgeIndex] = nd.SeenLocations[0].EdgeIndex
+			}
+		*/
 		linkedNodes = append(linkedNodes, nd.SeenLocations)
 	}
 	if len(linkedNodes) == 0 {
@@ -82,24 +85,28 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 			h.Write([]byte{0})
 		}
 	}
-	contentAddress := h.Sum(nil)
+	// contentAddress := h.Sum(nil)
 
-	pr, pw := io.Pipe()
-	go func() {
-		inodeMap.Write(pw)
-		pw.Close()
-	}()
-	hlMapAddress, _, err := sc.Cas.Insert(pr)
-	if err != nil {
-		return nil, err
-	}
+	/*
+		pr, pw := io.Pipe()
+		go func() {
+			inodeMap.Write(pw)
+			pw.Close()
+		}()
+		hlMapAddress, _, err := sc.Cas.Insert(pr)
+		if err != nil {
+			return nil, err
+		}
+	*/
 
 	inode := &InodeData{
 		Mode: MODE_HARDLINK_LAYER,
 	}
-	copy(inode.PathHash[:], rootNode.NodeAddress[:])
-	copy(inode.Address[:], contentAddress)
-	copy(inode.XattrAddress[:], hlMapAddress)
+	/*
+		copy(inode.PathHash[:], rootNode.NodeAddress[:])
+		copy(inode.Address[:], contentAddress)
+		copy(inode.XattrAddress[:], hlMapAddress)
+	*/
 
 	sn := StorageNode{
 		Inode: inode,
@@ -132,13 +139,13 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 		h.Write([]byte{0})
 		h.Write(childNd.NodeAddress[:])
 	}
-	copy(nd.Inode.Address[:], h.Sum(nil))
+	// copy(nd.Inode.Address[:], h.Sum(nil))
 
 	h.Reset()
 	io.WriteString(h, importPath)
-	copy(nd.Inode.PathHash[:], h.Sum(nil))
+	// copy(nd.Inode.PathHash[:], h.Sum(nil))
 
-	copy(nd.NodeAddress[:], sc.computeNodeAddress(nd.Inode))
+	// copy(nd.NodeAddress[:], sc.computeNodeAddress(nd.Inode))
 
 	err := sc.NodeDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(INODE_BUCKET_NAME))
@@ -155,7 +162,7 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 			nd.Inode.Size += childNd.Inode.Size
 			direntMap[childPath] = childNd.Inode.ToBytes()
 		}
-		treeNode, err := sc.DirentTree.WriteRecords(direntMap)
+		treeNode, err := sc.DirentTree.WriteRecords(sc, direntMap)
 		if err != nil {
 			return err
 		}

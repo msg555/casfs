@@ -1,45 +1,68 @@
 package storage
 
 import (
-	"io"
+	"github.com/go-errors/errors"
+
+	"github.com/msg555/ctrfs/blockfile"
+	"github.com/msg555/ctrfs/btree"
 )
 
-type InodeMap struct {
-	Map map[InodeId]InodeId
+type InodeMap interface {
+	AddMapping(srcInodeId, dstInodeId InodeId) error
+	GetMappedNode(srcInodeId InodeId) (InodeId, error)
 }
 
-func (mp *InodeMap) Init() {
-	mp.Map = make(map[InodeId]InodeId)
+type NullInodeMap struct{}
+
+func (mp *NullInodeMap) AddMapping(srcInodeId, dstInodeId InodeId) error {
+	return errors.New("cannot map inodes")
 }
 
-func (mp *InodeMap) Write(w io.Writer) error {
-	var buf [16]byte
-	for key, val := range mp.Map {
-		bo.PutUint64(buf[0:], uint64(key))
-		bo.PutUint64(buf[8:], uint64(val))
-		_, err := w.Write(buf[:])
-		if err != nil {
-			return err
-		}
+func (mp *NullInodeMap) GetMappedNode(srcInodeId InodeId) (InodeId, error) {
+	return srcInodeId, nil
+}
+
+type InodeTreeMap struct {
+	blocks   blockfile.BlockAllocator
+	treeRoot btree.TreeIndex
+	tree     btree.BTree
+}
+
+func (mp *InodeTreeMap) Init(bf blockfile.BlockAllocator) error {
+	mp.blocks = bf
+	mp.tree = btree.BTree{
+		MaxKeySize: 8,
+		EntrySize:  8,
 	}
-	return nil
+	err := mp.tree.Open(bf)
+	if err != nil {
+		return err
+	}
+
+	mp.treeRoot, err = mp.tree.CreateEmpty(mp)
+	return err
 }
 
-func (mp *InodeMap) Read(r io.Reader) error {
-	var buf [16]byte
+func (mp *InodeTreeMap) AddMapping(srcInodeId InodeId, dstInodeId InodeId) error {
+	var key, val [8]byte
+	bo.PutUint64(key[:], uint64(srcInodeId))
+	bo.PutUint64(val[:], uint64(dstInodeId))
+	return mp.tree.Insert(mp, mp.treeRoot, key[:], val[:], false)
+}
 
-	mp.Map = make(map[InodeId]InodeId)
-	for {
-		_, err := r.Read(buf[:])
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		key := InodeId(bo.Uint64(buf[:]))
-		val := InodeId(bo.Uint64(buf[8:]))
-		mp.Map[key] = val
+func (mp *InodeTreeMap) GetMappedNode(srcInodeId InodeId) (InodeId, error) {
+	var key [8]byte
+	bo.PutUint64(key[:], uint64(srcInodeId))
+	val, _, err := mp.tree.Find(mp.treeRoot, key[:])
+	if err != nil {
+		return 0, err
 	}
-	return nil
+	if val == nil {
+		return srcInodeId, nil
+	}
+	return InodeId(bo.Uint64(val)), nil
+}
+
+func (mp *InodeTreeMap) Sync() error {
+	return mp.blocks.SyncTag(mp)
 }
