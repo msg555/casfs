@@ -3,11 +3,13 @@ package storage
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"testing"
 
 	"github.com/msg555/ctrfs/blockcache"
 	"github.com/msg555/ctrfs/blockfile"
+	"github.com/msg555/ctrfs/unix"
 )
 
 func blockFileCreate(cache *blockcache.BlockCache) (blockfile.BlockAllocator, error) {
@@ -28,7 +30,7 @@ func blockFileCreate(cache *blockcache.BlockCache) (blockfile.BlockAllocator, er
 	return &bf, nil
 }
 
-func fillPath(t *testing.T, tf *TreeFile, length int) {
+func fillPath(t *testing.T, tf FileObjectReg, length int) {
 	buf := make([]byte, length)
 	for i := 0; i < length; i++ {
 		buf[i] = byte(i)
@@ -42,7 +44,7 @@ func fillPath(t *testing.T, tf *TreeFile, length int) {
 	}
 }
 
-func TestReadWrite(t *testing.T) {
+func TestRegReadWrite(t *testing.T) {
 	cache := blockcache.New(20, 4096)
 	bf1, err := blockFileCreate(cache)
 	if err != nil {
@@ -53,14 +55,20 @@ func TestReadWrite(t *testing.T) {
 	tm1 := TreeFileManager{}
 	tm1.Init(bf1, &NullInodeMap{})
 
-	tf1, err := tm1.NewFile(&InodeData{})
+	tfi1, err := tm1.NewFile(&InodeData{
+		Mode: unix.S_IFREG,
+	})
 	if err != nil {
 		t.Fatalf("error creating new file '%s'", err)
 	}
+	tf1 := tfi1.(FileObjectReg)
 	fillPath(t, tf1, 10000)
 
 	if tf1.GetInode().Size != 10000 {
 		t.Fatal("unexpected file size after write")
+	}
+	if err := tf1.Close(); err != nil {
+		t.Fatal("error closing layer 1 file")
 	}
 
 	bf2, err := blockFileCreate(cache)
@@ -82,10 +90,11 @@ func TestReadWrite(t *testing.T) {
 	tm2 := TreeFileManager{}
 	tm2.Init(bfOverlay, &imap)
 
-	tf2, err := tm2.OpenFile(tf1.GetInodeId())
+	tfi2, err := tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
+	tf2 := tfi2.(FileObjectReg)
 
 	off := 4040
 	buf := make([]byte, 100)
@@ -128,10 +137,11 @@ func TestReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tf2, err = tm2.OpenFile(tf1.GetInodeId())
+	tfi2, err = tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
+	tf2 = tfi2.(FileObjectReg)
 
 	_, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
@@ -149,7 +159,7 @@ func TestReadWrite(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
+func TestRegTruncate(t *testing.T) {
 	cache := blockcache.New(20, 4096)
 	bf1, err := blockFileCreate(cache)
 	if err != nil {
@@ -160,14 +170,20 @@ func TestTruncate(t *testing.T) {
 	tm1 := TreeFileManager{}
 	tm1.Init(bf1, &NullInodeMap{})
 
-	tf1, err := tm1.NewFile(&InodeData{})
+	tfi1, err := tm1.NewFile(&InodeData{
+		Mode: unix.S_IFREG,
+	})
 	if err != nil {
 		t.Fatalf("error creating new file '%s'", err)
 	}
+	tf1 := tfi1.(FileObjectReg)
 	fillPath(t, tf1, 10000)
 
 	if tf1.GetInode().Size != 10000 {
 		t.Fatal("unexpected file size after write")
+	}
+	if err := tf1.Close(); err != nil {
+		t.Fatal("error closing layer 1 file")
 	}
 
 	bf2, err := blockFileCreate(cache)
@@ -189,10 +205,11 @@ func TestTruncate(t *testing.T) {
 	tm2 := TreeFileManager{}
 	tm2.Init(bfOverlay, &imap)
 
-	tf2, err := tm2.OpenFile(tf1.GetInodeId())
+	tfi2, err := tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
+	tf2 := tfi2.(FileObjectReg)
 
 	off := 9950
 	buf := make([]byte, 100)
@@ -267,10 +284,11 @@ func TestTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tf2, err = tm2.OpenFile(tf1.GetInodeId())
+	tfi2, err = tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
+	tf2 = tfi2.(FileObjectReg)
 
 	n, err = tf2.ReadAt(buf, int64(off))
 	if err != nil {
@@ -299,9 +317,158 @@ func TestTruncate(t *testing.T) {
 	}
 	for i := 0; i < n; i++ {
 		if buf[i] != 0 {
-			println(i)
-			fmt.Println(buf)
 			t.Fatal("unexpected data read")
 		}
 	}
+}
+
+type direntHolder struct {
+	DtType int
+	InodeId
+}
+
+func fuzzDir(t *testing.T, rng *rand.Rand, tf FileObjectDir, state map[string]direntHolder) {
+	keyDomain := 100
+	for i := 0; i < 10000; i++ {
+		name := fmt.Sprintf("%d", rng.Int()%keyDomain)
+		stateEntry, ok := state[name]
+
+		switch rng.Int() % 3 {
+		case 0: // Lookup
+			dtType, inodeId, err := tf.Lookup(name)
+			if err != nil {
+				t.Fatalf("lookup failed '%s'", err)
+			}
+			if inodeId == 0 {
+				if ok {
+					t.Fatalf("failed to find existing entry")
+				}
+			} else {
+				if !ok {
+					t.Fatalf("found non-existant entry")
+				}
+				if stateEntry.DtType != dtType {
+					t.Fatalf("incorrect dt type stored")
+				}
+				if stateEntry.InodeId != inodeId {
+					t.Fatalf("incorrect inode id stored")
+				}
+			}
+		case 1: // Link
+			overwrite := rng.Int()%2 == 0
+			dtType := 1 + rng.Int()%16
+			inodeId := rng.Int63()
+			if err := tf.Link(name, dtType, inodeId, overwrite); err != nil {
+				t.Fatalf("link failed '%s'", err)
+			}
+			if !ok || overwrite {
+				state[name] = direntHolder{
+					DtType:  dtType,
+					InodeId: inodeId,
+				}
+			}
+		case 2: // Unlink
+			removed, err := tf.Unlink(name)
+			if err != nil {
+				t.Fatalf("unlink failed '%s'", err)
+			}
+			if ok && !removed {
+				t.Fatal("did not remove existing element")
+			}
+			if !ok && removed {
+				t.Fatal("removed non-existant element")
+			}
+			delete(state, name)
+		}
+		if i%100 == 0 { // Scan
+			count := 0
+			done, err := tf.Scan("", func(name string, dtType int, inodeId InodeId) bool {
+				count++
+				entry, ok := state[name]
+				if !ok {
+					t.Fatal("scan found element that does not exist")
+				}
+				if entry.DtType != dtType {
+					t.Fatal("scan gave incorrect dt type")
+				}
+				if entry.InodeId != inodeId {
+					t.Fatal("scan gave incorrect inode id")
+				}
+				return true
+			})
+			if err != nil {
+				t.Fatalf("scan failed '%s'", err)
+			}
+			if !done {
+				t.Fatal("scan unexpectedly did not finish")
+			}
+			if count != len(state) {
+				t.Fatal("scan did not find all elements")
+			}
+		}
+	}
+}
+
+func TestDirFuzz(t *testing.T) {
+	cache := blockcache.New(20, 4096)
+	bf1, err := blockFileCreate(cache)
+	if err != nil {
+		t.Fatalf("unexpected error creating block file '%s'", err)
+	}
+	defer bf1.Close()
+
+	tm1 := TreeFileManager{}
+	tm1.Init(bf1, &NullInodeMap{})
+
+	tfi1, err := tm1.NewFile(&InodeData{
+		Mode: unix.S_IFDIR,
+	})
+	if err != nil {
+		t.Fatalf("error creating new dir '%s'", err)
+	}
+	tf1 := tfi1.(FileObjectDir)
+
+	rng := rand.New(rand.NewSource(555))
+	state := make(map[string]direntHolder)
+	fuzzDir(t, rng, tf1, state)
+
+	bf2, err := blockFileCreate(cache)
+	if err != nil {
+		t.Fatalf("unexpected error creating block file '%s'", err)
+	}
+	defer bf2.Close()
+
+	bfOverlay := &blockfile.BlockOverlayAllocator{}
+	bfOverlay.Init(bf1, bf2)
+	defer bfOverlay.Close()
+
+	imap := InodeTreeMap{}
+	err = imap.Init(bfOverlay)
+	if err != nil {
+		t.Fatalf("unexpected error creating inode map '%s'", err)
+	}
+
+	tm2 := TreeFileManager{}
+	tm2.Init(bfOverlay, &imap)
+
+	tfi2, err := tm2.OpenFile(unix.DT_DIR, tf1.GetInodeId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf2 := tfi2.(FileObjectDir)
+
+	fuzzDir(t, rng, tf2, state)
+
+	err = tf2.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tfi2, err = tm2.OpenFile(unix.DT_DIR, tf1.GetInodeId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf2 = tfi2.(FileObjectDir)
+
+	fuzzDir(t, rng, tf2, state)
 }

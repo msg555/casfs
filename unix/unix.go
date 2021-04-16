@@ -82,6 +82,10 @@ func S_ISREG(mode uint32) bool {
 	return ((mode & S_IFMT) == S_IFREG)
 }
 
+func S_ISLNK(mode uint32) bool {
+	return ((mode & S_IFMT) == S_IFLNK)
+}
+
 func S_ISBLK(mode uint32) bool {
 	return ((mode & S_IFMT) == S_IFBLK)
 }
