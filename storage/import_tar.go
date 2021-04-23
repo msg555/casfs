@@ -201,7 +201,7 @@ func (sc *StorageContext) ImportTar(r io.Reader) (*StorageNode, error) {
 			}
 			if record.Typeflag != tar.TypeDir {
 				fileNodeMap[record.Name] = nd
-				copy(nd.NodeAddress[:], sc.computeNodeAddress(nd.Inode))
+				//copy(nd.NodeAddress[:], sc.computeNodeAddress(nd.Inode))
 			}
 		}
 

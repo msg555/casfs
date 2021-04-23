@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"io/ioutil"
 	"os"
 	"path"
 
@@ -9,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/msg555/ctrfs/blockfile"
-	"github.com/msg555/ctrfs/btree"
 )
 
 type MountView struct {
@@ -21,16 +19,15 @@ type MountView struct {
 	FileManager TreeFileManager
 
 	Blocks     blockfile.BlockAllocator
-	DirentTree *btree.BTree
 
 	inodeMap InodeMap
 }
 
 func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*MountView, error) {
-	rootInode, err := sc.LookupAddressInode(rootAddress)
+	rootInodeId, err := sc.lookupAddressInode(rootAddress)
 	if err != nil {
 		return nil, err
-	} else if rootInode == nil {
+	} else if rootInodeId == 0 {
 		return nil, errors.New("could not find root content address")
 	}
 
@@ -41,6 +38,7 @@ func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*Mount
 		Storage:  sc,
 	}
 
+/*
 	if rootInode.Mode == MODE_HARDLINK_LAYER {
 		// TODO
 	}
@@ -75,22 +73,12 @@ func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*Mount
 		mnt.Blocks = sc.Blocks
 	}
 
-	mnt.DirentTree = &btree.BTree{
-		MaxKeySize: sc.DirentTree.MaxKeySize,
-		EntrySize:  sc.DirentTree.EntrySize,
-		FanOut:     sc.DirentTree.FanOut,
-	}
-	err = mnt.DirentTree.Open(mnt.Blocks)
+	// TODO: Use the actual inode map
+	err = mnt.FileManager.Init(mnt.Blocks, &NullInodeMap{})
 	if err != nil {
 		return nil, err
 	}
-
-	/*
-		err = mnt.FileManager.Init(mnt.Blocks)
-		if err != nil {
-			return nil, err
-		}
-	*/
+*/
 
 	return mnt, nil
 }
@@ -111,26 +99,6 @@ func (sc *StorageContext) OpenMount(id uuid.UUID) (*MountView, error) {
 	}
 
 	return mnt, nil
-}
-
-func (mnt *MountView) LookupChild(inode *InodeData, name string) (*InodeData, InodeId, error) {
-	childInode, childInodeId, err := mnt.Storage.LookupChild(inode, name)
-	if err != nil {
-		return nil, 0, err
-	}
-	if childInode == nil {
-		return nil, 0, nil
-	}
-	/*
-		if newInodeId, found := mnt.inodeMap.Map[childInodeId]; found {
-			childInodeId = newInodeId
-		}
-	*/
-	return childInode, childInodeId, err
-}
-
-func (mnt *MountView) GetInode(inodeId InodeId) (*InodeData, error) {
-	return mnt.Storage.ReadInode(inodeId)
 }
 
 func (mnt *MountView) Readlink(inodeData *InodeData) (string, error) {

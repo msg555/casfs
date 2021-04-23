@@ -7,7 +7,7 @@ import (
 
 	"github.com/boltdb/bolt"
 
-	"github.com/msg555/ctrfs/btree"
+	// "github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
 )
 
@@ -19,7 +19,7 @@ type importNode struct {
 
 type importNodeLocation struct {
 	Path      string
-	EdgeIndex btree.IndexType
+	InodeId
 }
 
 func validatePathName(name string) bool {
@@ -38,8 +38,10 @@ func validatePathName(name string) bool {
 }
 
 func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap interface{}) (*StorageNode, error) {
-	// inodeMap := InodeMap{}
-	// inodeMap.Init()
+	inodeMap := InodeTreeMap{}
+	if err := inodeMap.Init(sc.Blocks, 0); err != nil {
+		return nil, err
+	}
 	var linkedNodes [][]importNodeLocation
 
 	for it := reflect.ValueOf(nodeMap).MapRange(); it.Next(); {
@@ -50,12 +52,9 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 		sort.Slice(nd.SeenLocations, func(i, j int) bool {
 			return nd.SeenLocations[i].Path < nd.SeenLocations[j].Path
 		})
-		/*
-			TODO
-			for _, loc := range nd.SeenLocations[1:] {
-				inodeMap.Map[loc.EdgeIndex] = nd.SeenLocations[0].EdgeIndex
-			}
-		*/
+		for _, loc := range nd.SeenLocations[1:] {
+			inodeMap.AddMapping(nd.SeenLocations[0].InodeId, loc.InodeId)
+		}
 		linkedNodes = append(linkedNodes, nd.SeenLocations)
 	}
 	if len(linkedNodes) == 0 {
@@ -99,9 +98,12 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 		}
 	*/
 
+/*
 	inode := &InodeData{
 		Mode: MODE_HARDLINK_LAYER,
+		TreeNode: 
 	}
+*/
 	/*
 		copy(inode.PathHash[:], rootNode.NodeAddress[:])
 		copy(inode.Address[:], contentAddress)
@@ -109,8 +111,9 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 	*/
 
 	sn := StorageNode{
-		Inode: inode,
+		//Inode: inode,
 	}
+/*
 	copy(sn.NodeAddress[:], sc.computeNodeAddress(inode))
 
 	err = sc.NodeDB.Update(func(tx *bolt.Tx) error {
@@ -120,6 +123,7 @@ func (sc *StorageContext) createHardlinkLayer(rootNode *StorageNode, nodeMap int
 	if err != nil {
 		return nil, err
 	}
+*/
 
 	return &sn, nil
 }
@@ -176,15 +180,22 @@ func (sc *StorageContext) createDirentTree(nd *importNode, importPath string, ch
 
 	if !ignoreHardlinks {
 		for childPath, childNd := range children {
-			_, edgeIdx, err := sc.DirentTree.Find(nd.Inode.TreeNode, []byte(childPath))
+			_, _, err := sc.DirentTree.Find(nd.Inode.TreeNode, []byte(childPath))
 			if err != nil {
 				return err
 			}
 			childNd.SeenLocations = append(childNd.SeenLocations, importNodeLocation{
 				Path:      importPath + "/" + childPath,
-				EdgeIndex: edgeIdx,
+				// EdgeIndex: edgeIdx,
 			})
 		}
 	}
 	return nil
+}
+
+func (sc *StorageContext) importFileFromReader(r io.Reader) (InodeId, error) {
+	for offset := int64(0); ; {
+		unix.lseek(fd, offset, unix.SEEK_DATA)
+	}
+	sc.FileManager.
 }

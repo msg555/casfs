@@ -2,6 +2,7 @@ package storage
 
 import (
 	"github.com/msg555/ctrfs/blockfile"
+	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
 )
 
@@ -18,6 +19,24 @@ func (tf *TreeFileReg) UpdateInode(updateFunc func(*InodeData) error) error {
 		}
 		return nil
 	})
+}
+
+func (tf *TreeFileReg) searchBlockInline(data []byte, block int64) (int, bool) {
+	lo := 0
+	hi := int(tf.inodeData.Blocks)
+	for lo < hi {
+		md := lo + (hi - lo) / 2
+
+		mdBlock := int64(bo.Uint64(data[INODE_SIZE+md*16:]))
+		if mdBlock == block {
+			return md, true
+		} else if mdBlock < block {
+			lo = md + 1
+		} else {
+			hi = md
+		}
+	}
+	return lo, false
 }
 
 func (tf *TreeFileReg) truncate() error {
@@ -120,41 +139,48 @@ func (tf *TreeFileReg) convertToTreeFile() error {
 func (tf *TreeFileReg) lookupBlockInline(block int64, forWriting bool) (blockfile.BlockIndex, error) {
 	var result blockfile.BlockIndex
 	err := tf.manager.blocks.AccessBlock(tf, tf.inodeId, func(data []byte) (bool, error) {
-		for i := 0; i < int(tf.inodeData.Blocks); i++ {
-			iblk := int64(bo.Uint64(data[INODE_SIZE+i*16:]))
-			if iblk == block {
-				result = blockfile.BlockIndex(bo.Uint64(data[INODE_SIZE+i*16+8:]))
+		insertInd, match := tf.searchBlockInline(data, block)
+		insertData := data[INODE_SIZE+insertInd*16:]
 
-				// Copy on write if coming from a read only block.
-				if forWriting {
-					dupBlockIndex, err := blockfile.Duplicate(tf, tf.manager.blocks, result, true)
-					if err != nil {
-						return false, err
-					}
-					if result != dupBlockIndex {
-						result = dupBlockIndex
-						bo.PutUint64(data[INODE_SIZE+i*16+8:], uint64(dupBlockIndex))
-						return true, nil
-					}
+		if match {
+			result = blockfile.BlockIndex(bo.Uint64(insertData[8:]))
+
+			// Copy on write if coming from a read only block.
+			if forWriting {
+				dupBlockIndex, err := blockfile.Duplicate(tf, tf.manager.blocks, result, true)
+				if err != nil {
+					return false, err
 				}
-
-				return false, nil
+				if result != dupBlockIndex {
+					result = dupBlockIndex
+					bo.PutUint64(insertData[8:], uint64(dupBlockIndex))
+					return true, nil
+				}
 			}
+			return false, nil
 		}
 		if !forWriting {
 			return false, nil
 		}
+
 		if INODE_SIZE+int(tf.inodeData.Blocks+1)*16 > len(data) {
+			// No more space for an inline block
 			return false, nil
 		}
+
+		// Create new block and insert it into the block list.
 		blkIdx, err := tf.manager.blocks.Allocate(tf)
 		if err != nil {
 			return false, err
 		}
-		bo.PutUint64(data[INODE_SIZE+tf.inodeData.Blocks*16:], uint64(block))
-		bo.PutUint64(data[INODE_SIZE+tf.inodeData.Blocks*16+8:], uint64(blkIdx))
+		copy(insertData[16:16*(int(tf.inodeData.Blocks)-insertInd+1)], insertData)
+		bo.PutUint64(insertData, uint64(block))
+		bo.PutUint64(insertData[8:], uint64(blkIdx))
+
+		// Update inode block count
 		tf.inodeData.Blocks++
 		copy(data, tf.inodeData.ToBytes())
+
 		return true, nil
 	})
 	return result, err
@@ -348,4 +374,55 @@ func (tf *TreeFileReg) WriteAt(p []byte, off int64) (int, error) {
 	}
 
 	return written, nil
+}
+
+func (tf *TreeFileReg) cacheContentAddress(sc *StorageContext) ([]byte, error) {
+	blocks := tf.manager.blocks
+	if blocks != sc.Blocks {
+		panic("cannot cache content address for mount blocks")
+	}
+
+	hsh := sc.HashFactory()
+	hsh.Write([]byte("file:"))
+
+	if tf.inodeData.TreeNode == 0 {
+		err := blocks.AccessBlock(tf, tf.inodeId, func(data []byte) (bool, error) {
+			for i := 0; i < int(tf.inodeData.Blocks); i++ {
+				buf := data[INODE_SIZE+i*16:]
+				hsh.Write(buf[:8])
+
+				blockNode := blockfile.BlockIndex(bo.Uint64(buf[8:]))
+				if bca, err := sc.cacheDataBlockContentAddress(blockNode); err != nil {
+					return false, err
+				} else {
+					hsh.Write(bca)
+				}
+			}
+			return false, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		_, err := tf.manager.fileBlockTree.Scan(tf.inodeData.TreeNode, nil, func(_ btree.IndexType, key []byte, val []byte) bool {
+			hsh.Write(key)
+
+			blockNode := blockfile.BlockIndex(bo.Uint64(val))
+			if bca, err := sc.cacheDataBlockContentAddress(blockNode); err != nil {
+				return false
+			} else {
+				hsh.Write(bca)
+			}
+			return true
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	contentAddress := hsh.Sum(nil)
+	if err := sc.insertBlockIntoCache(contentAddress, tf.inodeId); err != nil {
+		return nil, err
+	}
+	return contentAddress, nil
 }

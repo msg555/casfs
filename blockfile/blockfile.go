@@ -40,6 +40,12 @@ type BlockFile struct {
 	Cache        *blockcache.BlockCache
 	File         *os.File
 
+  // Number of blocks to "pre-allocate" upon initialization. These blocks will
+  // be numbered 1, 2, ..., `PreAllocatedBlocks`. Note that 0 is always a
+  // special block used internally and should never be used.
+  PreAllocatedBlocks BlockIndex
+
+
 	blocksPerMeta int
 
 	allocLock      sync.Mutex
@@ -177,6 +183,11 @@ func (bf *BlockFile) Allocate(tag interface{}) (BlockIndex, error) {
 	if lo > 1 {
 		result := int64(bo.Uint64(buf[(lo-1)*8:]))
 		if freeHead == 0 && lo == 2 {
+			if result < bf.PreAllocatedBlocks {
+				// Skip the allocation counter past pre allocated blocks if this is the
+				// first block that we are manually allocating.
+				result = bf.PreAllocatedBlocks
+			}
 			result++
 			if bf.blocksPerMeta != 0 && result%int64(bf.blocksPerMeta) == 0 {
 				// Do not assign new blocks to a meta block index.

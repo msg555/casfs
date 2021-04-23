@@ -82,7 +82,7 @@ func TestRegReadWrite(t *testing.T) {
 	defer bfOverlay.Close()
 
 	imap := InodeTreeMap{}
-	err = imap.Init(bfOverlay)
+	err = imap.Init(bfOverlay, 0)
 	if err != nil {
 		t.Fatalf("unexpected error creating inode map '%s'", err)
 	}
@@ -197,7 +197,7 @@ func TestRegTruncate(t *testing.T) {
 	defer bfOverlay.Close()
 
 	imap := InodeTreeMap{}
-	err = imap.Init(bfOverlay)
+	err = imap.Init(bfOverlay, 0)
 	if err != nil {
 		t.Fatalf("unexpected error creating inode map '%s'", err)
 	}
@@ -443,7 +443,7 @@ func TestDirFuzz(t *testing.T) {
 	defer bfOverlay.Close()
 
 	imap := InodeTreeMap{}
-	err = imap.Init(bfOverlay)
+	err = imap.Init(bfOverlay, 0)
 	if err != nil {
 		t.Fatalf("unexpected error creating inode map '%s'", err)
 	}

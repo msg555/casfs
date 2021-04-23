@@ -8,21 +8,9 @@ import (
 	"github.com/msg555/ctrfs/unix"
 )
 
-/*
-type FileView interface {
-	Close() error
-
-	GetInode() InodeData
-	UpdateInode(func(*InodeData) error) error
-
-	Sync() error
-
-	ReadAt([]byte, int64) (int, error)
-	WriteAt([]byte, int64) (int, error)
-}
-*/
-
 type FileObject interface {
+	blockObject
+
 	GetInodeId() InodeId
 	GetInode() InodeData
 	UpdateInode(updateFunc func(inodeData *InodeData) error) error
@@ -280,4 +268,9 @@ func (tf *TreeFileObject) Sync() error {
 
 func (tf *TreeFileObject) addRef() {
 	tf.refCount++
+}
+
+func (tf *TreeFileOther) cacheContentAddress(sc *StorageContext) ([]byte, error) {
+	// TODO
+	return nil, nil
 }

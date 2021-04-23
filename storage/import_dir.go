@@ -19,6 +19,27 @@ type dirImportContext struct {
 	IgnoreHardlinks bool
 }
 
+type fdReader struct {
+  FileDescriptor int
+}
+
+func (f fdReader) Read(buf []byte) (int, error) {
+  n, err := unix.Read(f.FileDescriptor, buf)
+  if err == nil && n == 0 {
+    return 0, io.EOF
+  }
+  return n, err
+}
+
+func nullTerminatedString(data []byte) string {
+  for i, ch := range data {
+    if ch == 0 {
+      return string(data[:i])
+    }
+  }
+  return string(data)
+}
+
 // Allocate a new inode and return a StorageNode to represent it.
 func (dc *dirImportContext) CreateStorageNodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *importNode {
 	nd := &importNode{

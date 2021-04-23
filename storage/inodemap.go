@@ -28,7 +28,7 @@ type InodeTreeMap struct {
 	tree     btree.BTree
 }
 
-func (mp *InodeTreeMap) Init(bf blockfile.BlockAllocator) error {
+func (mp *InodeTreeMap) Init(bf blockfile.BlockAllocator, treeRoot btree.TreeIndex) error {
 	mp.blocks = bf
 	mp.tree = btree.BTree{
 		MaxKeySize: 8,
@@ -39,8 +39,12 @@ func (mp *InodeTreeMap) Init(bf blockfile.BlockAllocator) error {
 		return err
 	}
 
-	mp.treeRoot, err = mp.tree.CreateEmpty(mp)
-	return err
+	if treeRoot == 0 {
+		mp.treeRoot, err = mp.tree.CreateEmpty(mp)
+		return err
+	}
+	mp.treeRoot = treeRoot
+	return nil
 }
 
 func (mp *InodeTreeMap) AddMapping(srcInodeId InodeId, dstInodeId InodeId) error {

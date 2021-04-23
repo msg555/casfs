@@ -248,3 +248,8 @@ func (tf *TreeFileDir) Scan(startName string, entryCallback func(name string, dt
 	}
 	return tf.scanTree(startName, entryCallback)
 }
+
+func (tf *TreeFileDir) cacheContentAddress(sc* StorageContext) ([]byte, error) {
+	// TODO
+	return nil, nil
+}
