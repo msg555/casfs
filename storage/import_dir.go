@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"bytes"
+	"io"
 
 	"github.com/go-errors/errors"
 
@@ -15,7 +15,8 @@ type hostInode struct {
 
 type dirImportContext struct {
 	Storage         *StorageContext
-	InodeMap        map[hostInode]*importNode
+	MountView *MountView
+	HostInodeMap        map[hostInode]InodeId
 	IgnoreHardlinks bool
 }
 
@@ -40,62 +41,69 @@ func nullTerminatedString(data []byte) string {
   return string(data)
 }
 
-// Allocate a new inode and return a StorageNode to represent it.
-func (dc *dirImportContext) CreateStorageNodeFromStat(pathHash, address, xattrAddress []byte, st *unix.Stat_t) *importNode {
-	nd := &importNode{
-		Inode: InodeFromStat(st),
-	}
-	copy(nd.NodeAddress[:], dc.Storage.computeNodeAddress(nd.Inode))
-	return nd
-}
+func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (InodeId, error) {
+	inodeData := InodeFromStat(st)
+	inodeData.Size = 0
 
-func (dc *dirImportContext) ImportFile(fd int, st *unix.Stat_t) (*importNode, error) {
-	size := int64(0)
-	addr := make([]byte, HASH_BYTE_LENGTH)
-	var err error
+	file, err := dc.MountView.FileManager.NewFile(inodeData)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
 	switch st.Mode & unix.S_IFMT {
 	case unix.S_IFREG:
-		addr, size, err = dc.Storage.Cas.Insert(fdReader{FileDescriptor: fd})
+		written, err := io.Copy(file.(io.Writer), &fdReader{FileDescriptor: fd})
 		if err != nil {
-			return nil, err
+			return 0, err
+		}
+		if written != st.Size {
+			return 0, errors.New("failed to copy file")
 		}
 	case unix.S_IFLNK:
 		if st.Size > unix.PATH_MAX_LIMIT {
-			return nil, errors.New("symlink path too long")
+			return 0, errors.New("symlink path too long")
 		}
 		buf := make([]byte, st.Size+1)
 		n, err := unix.Readlinkat(fd, "", buf)
 		if err != nil {
-			return nil, err
+			return 0, err
 		} else if int64(n) != st.Size {
-			return nil, errors.New("unexpected symlink data")
+			return 0, errors.New("unexpected symlink data")
 		}
 
-		addr, size, err = dc.Storage.Cas.Insert(bytes.NewReader(buf[:n]))
+		written, err := file.(io.Writer).Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
-	case unix.S_IFBLK, unix.S_IFCHR, unix.S_IFIFO, unix.S_IFSOCK:
-	default:
-		return nil, errors.New("unsupported special file type")
+		if int64(written) != st.Size {
+			return 0, errors.New("failed to write symlink")
+		}
 	}
 
-	st.Size = size
-	return dc.CreateStorageNodeFromStat(nil, addr, nil, st), nil
+	return file.GetInodeId(), nil
 }
 
-func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, fd int, st *unix.Stat_t) (*importNode, error) {
+func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, fd int, st *unix.Stat_t) (InodeId, error) {
 	if !unix.S_ISDIR(st.Mode) {
-		return nil, errors.New("must be called on directory")
+		return 0, errors.New("must be called on directory")
 	}
 
-	children := make(map[string]*importNode)
+	inodeData := InodeFromStat(st)
+	file, err := dc.MountView.FileManager.NewFile(inodeData)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
 
-	buf := make([]byte, 1<<16)
+	fileDir := file.(FileObjectDir)
+
+	buf := dc.Storage.Cache.Pool.Get().([]byte)
+	defer dc.Storage.Cache.Pool.Put(buf)
 	for {
 		bytesRead, err := unix.Getdents(fd, buf)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		if bytesRead == 0 {
 			break
@@ -107,38 +115,15 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 			// off := unix.Hbo.Uint64(buf[pos+8:])
 			reclen := unix.Hbo.Uint16(buf[pos+16:])
 			tp := uint8(buf[pos+18])
-			name := NullTerminatedString(buf[pos+19 : pos+int(reclen)])
+			name := nullTerminatedString(buf[pos+19 : pos+int(reclen)])
 			pos += int(reclen)
 
 			if ino == 0 {
 				// Skip deleted files
 				continue
 			}
-
 			if !validatePathName(name) {
 				continue
-			}
-
-			cacheInode := func(childSt *unix.Stat_t, forwardFunc func() (*importNode, error)) (*importNode, error) {
-				if dc.IgnoreHardlinks {
-					return forwardFunc()
-				}
-
-				hostInode := hostInode{
-					Device: childSt.Dev,
-					Inode:  childSt.Ino,
-				}
-
-				childNd, found := dc.InodeMap[hostInode]
-				if !found {
-					childNd, err = forwardFunc()
-					if err != nil {
-						return nil, err
-					}
-					dc.InodeMap[hostInode] = childNd
-				}
-
-				return childNd, nil
 			}
 
 			flags := unix.O_PATH | unix.O_NOFOLLOW
@@ -147,64 +132,68 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 			}
 			childFd, err := unix.Openat(fd, name, flags, 0)
 			if err != nil {
-				return nil, err
+				return 0, err
 			}
 
 			var childSt unix.Stat_t
 			err = unix.Fstat(childFd, &childSt)
 			if err != nil {
 				unix.Close(childFd)
-				return nil, err
+				return 0, err
 			}
 
-			var childNd *importNode
+			err = nil
+			var childInodeId InodeId
 			switch tp {
 			case unix.DT_FIFO, unix.DT_CHR, unix.DT_BLK, unix.DT_LNK, unix.DT_SOCK, unix.DT_REG:
-				childNd, err = cacheInode(&childSt, func() (*importNode, error) {
-					return dc.ImportFile(childFd, &childSt)
-				})
-				if err != nil {
-					unix.Close(childFd)
-					return nil, err
+				hostInode := hostInode{
+					Device: childSt.Dev,
+					Inode:  childSt.Ino,
+				}
+				childInodeId, found := dc.HostInodeMap[hostInode]
+
+				if !found {
+					childInodeId, err = dc.ImportFile(childFd, &childSt)
+					if err == nil {
+						dc.HostInodeMap[hostInode] = childInodeId
+					}
 				}
 			case unix.DT_DIR:
-				childNd, err = dc.ImportDirectory(importDepth+1, importPath+"/"+name, childFd, &childSt)
-				if err != nil {
-					unix.Close(childFd)
-					return nil, err
-				}
+				childInodeId, err = dc.ImportDirectory(importDepth+1, importPath+"/"+name, childFd, &childSt)
 			default:
-				return nil, errors.New("unexpected file type returned")
+				err = errors.New("unexpected file type returned")
 			}
-
-			err = unix.Close(childFd)
 			if err != nil {
-				return nil, err
+				unix.Close(childFd)
+				return 0, err
 			}
-
-			children[name] = childNd
+			if err := unix.Close(childFd); err != nil {
+				return 0, err
+			}
+			if err := fileDir.Link(name, int(tp), childInodeId, false); err != nil {
+				return 0, err
+			}
 		}
 	}
 
-	nd := dc.CreateStorageNodeFromStat(nil, nil, nil, st)
-	err := dc.Storage.createDirentTree(nd, importPath, children, dc.IgnoreHardlinks)
-	if err != nil {
-		return nd, nil
-	}
-
-	return nd, nil
+	return file.GetInodeId(), nil
 }
 
 func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
+	mountView, err := sc.CreateEmptyMount()
+	if err != nil {
+		return nil, err
+	}
+
 	dc := &dirImportContext{
 		Storage:         sc,
-		InodeMap:        make(map[hostInode]*importNode),
+		MountView: mountView,
+		HostInodeMap:        make(map[hostInode]InodeId),
 		IgnoreHardlinks: false,
 	}
 
 	var st unix.Stat_t
-	err := unix.Stat(pathname, &st)
-	if err != nil {
+	if err := unix.Stat(pathname, &st); err != nil {
 		return nil, err
 	}
 
@@ -218,18 +207,10 @@ func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
 	}
 	defer unix.Close(fd)
 
-	nd, err := dc.ImportDirectory(0, "", fd, &st)
+	inodeId, err := dc.ImportDirectory(0, "", fd, &st)
 	if err != nil {
 		return nil, err
 	}
 
-	sn := &StorageNode{
-		Inode: nd.Inode,
-	}
-	copy(sn.NodeAddress[:], nd.NodeAddress[:])
-
-	if dc.IgnoreHardlinks {
-		return sn, nil
-	}
-	return sc.createHardlinkLayer(sn, dc.InodeMap)
+	return nil, nil
 }

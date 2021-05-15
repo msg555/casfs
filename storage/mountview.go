@@ -10,17 +10,58 @@ import (
 	"github.com/msg555/ctrfs/blockfile"
 )
 
+const (
+	blockIndexMeta = 1
+	blockIndexRemapTree = 2
+)
+
 type MountView struct {
 	ID          uuid.UUID
 	RootInode   InodeData
 	ReadOnly    bool
-	WritePath   string
 	Storage     *StorageContext
 	FileManager TreeFileManager
-
 	Blocks     blockfile.BlockAllocator
+	InodeMap
+}
 
-	inodeMap InodeMap
+// Creates a new empty mount. This mount does not have a root inode and it
+// should be created and set by the caller.
+func (sc *StorageContext) CreateEmptyMount() (*MountView, error) {
+	id := uuid.New()
+
+	// Create new block file for the mount.
+	blockFilePath := path.Join(sc.BasePath, "mounts", id.String())
+	bf := &blockfile.BlockFile{
+		Cache: sc.Cache,
+		PreAllocatedBlocks: 2,
+	}
+	if err := bf.Open(blockFilePath, 0666); err != nil {
+		return nil, err
+	}
+
+	imap := &InodeTreeMap{}
+	if err := imap.Init(bf, blockIndexRemapTree); err != nil {
+		bf.Close()
+		return nil, err
+	}
+
+	mnt := &MountView{
+		ID: id,
+		ReadOnly: false,
+		Storage: sc,
+		Blocks: bf,
+		InodeMap: imap,
+	}
+
+	if err := mnt.FileManager.Init(bf, imap); err != nil {
+		bf.Close()
+		return nil, err
+	}
+
+		RootInode: 3,
+
+	return mnt, nil
 }
 
 func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*MountView, error) {
@@ -101,6 +142,9 @@ func (sc *StorageContext) OpenMount(id uuid.UUID) (*MountView, error) {
 	return mnt, nil
 }
 
+func (mnt *MountView) SetRoot(inodeId InodeId) error {
+}
+
 func (mnt *MountView) Readlink(inodeData *InodeData) (string, error) {
 	// TODO: Cache this in block-cache somehow?
 	/*
@@ -118,4 +162,8 @@ func (mnt *MountView) Readlink(inodeData *InodeData) (string, error) {
 		return string(target), nil
 	*/
 	return "", nil
+}
+
+func (mnt *MountView) Destroy(commit bool) error {
+	return nil
 }

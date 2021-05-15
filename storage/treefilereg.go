@@ -426,3 +426,37 @@ func (tf *TreeFileReg) cacheContentAddress(sc *StorageContext) ([]byte, error) {
 	}
 	return contentAddress, nil
 }
+
+func (tf *TreeFileReg) Read(p []byte) (int, error) {
+	tf.offsetLock.Lock()
+	defer tf.offsetLock.Unlock()
+
+	n, err := tf.ReadAt(p, tf.offset)
+	tf.offset += n
+	return n, err
+}
+
+func (tf *TreeFileReg) Write(p []byte) (int, error) {
+	tf.offsetLock.Lock()
+	defer tf.offsetLock.Unlock()
+
+	n, err := tf.WriteAt(p, tf.offset)
+	tf.offset += n
+	return n, err
+}
+
+func (tf *TreeFileReg) Seek(offset int64, whence int) (int64, error) {
+	tf.offsetLock.Lock()
+	defer tf.offsetLock.Unlock()
+
+	base := int64(0)
+	if whence == io.SeekCurrent {
+		base = tf.offset
+	} else if whence == io.SeekEnd {
+		tf.lock.RLock()
+		defer tf.lock.RUnlock()
+		base = tf.inodeData.Size
+	}
+
+	tf.offset = base + offset
+}

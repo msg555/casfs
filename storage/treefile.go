@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"sync"
 
 	"github.com/msg555/ctrfs/blockfile"
@@ -9,13 +10,13 @@ import (
 )
 
 type FileObject interface {
+	io.Closer
 	blockObject
 
 	GetInodeId() InodeId
 	GetInode() InodeData
 	UpdateInode(updateFunc func(inodeData *InodeData) error) error
 
-	Close() error
 	Sync() error
 
 	addRef()
@@ -23,9 +24,11 @@ type FileObject interface {
 
 type FileObjectReg interface {
 	FileObject
-
-	ReadAt(p []byte, off int64) (n int, err error)
-	WriteAt(p []byte, off int64) (n int, err error)
+	io.ReaderAt
+	io.WriterAt
+	io.Reader
+	io.Writer
+	io.Seeker
 }
 
 type FileObjectDir interface {
@@ -68,9 +71,14 @@ type TreeFileObject struct {
 	initialized bool
 }
 
-type TreeFileReg struct{ TreeFileObject }
+type TreeFileReg struct{
+	TreeFileObject
+
+	offset int64
+	offsetLock      sync.RWMutex
+}
+
 type TreeFileDir struct{ TreeFileObject }
-type TreeFileLnk struct{ TreeFileObject }
 type TreeFileOther struct{ TreeFileObject }
 
 func (tm *TreeFileManager) Init(blocks blockfile.BlockAllocator, inodeMap InodeMap) error {
@@ -110,12 +118,10 @@ func (tm *TreeFileManager) NewFile(inodeData *InodeData) (FileObject, error) {
 	tf.srcInodeId = inodeId
 
 	var fo FileObject
-	if unix.S_ISREG(inodeData.Mode) {
+	if unix.S_ISREG(inodeData.Mode) || unix.S_ISLNK(inodeData.Mode) {
 		fo = &TreeFileReg{TreeFileObject: tf}
 	} else if unix.S_ISDIR(inodeData.Mode) {
 		fo = &TreeFileDir{TreeFileObject: tf}
-	} else if unix.S_ISLNK(inodeData.Mode) {
-		fo = &TreeFileLnk{TreeFileObject: tf}
 	} else {
 		fo = &TreeFileOther{TreeFileObject: tf}
 	}

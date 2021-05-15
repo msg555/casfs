@@ -6,13 +6,24 @@ This project will aim to implement a file-level content-addressed backing store
 that can be mounted, imported, exported, shared, and used as an additional
 storage engine for container systems.
 
-This will aim to address the below
-shortcomings of current union based overlay storage drives:
+ctrfs is designed to be the engine for read/write container file systems. It is
+specialized for containers by observing the following special requirements of
+container images.
 
-* Better sharing accross different layers (and within layers), same data = same storage
-* Separate metadata from data so metadata updates (e.g. ctime change) no longer breaks data caches
-* A single file update doesn't trigger a whole layer's cache to be invalidated
-* Similarly pushing and pulling from a remote only requires sending/receiving new files and metadata
+* There is a high degree of data duplication between layers of different images.
+ * Data is deduplicated at the block level across all layers/images
+ * Pushing/pulling to registry is done at the file level using content addressing with metadata stored separately
+* Overlay copy-up can be slow on file systems that do not support reflinks (check/measure this)
+ * Persistent data structures are used and data is "copied-up" a single block at a time
+ * Only dirty blocks need to be written back to central storage on commit.
+* Image building is the most common reason to write to the container layer.
+ * There is no journaling
+ * fsync calls are ignored by default
+ * All writes are asynchronous and written only to cache sychronously
+ * Important persistant data used by a container should be written to a separate volume
+* ctrfs also fixes some compatibility issues
+ * Hardlinks work as expected after committing
+
+Other notes
 * Tree data will be content addressed
-* Any tree can be mounted (e.g. subdirectories of other trees)
-* No longer have to worry about number
+* Hardlinks are supported through special inode remapping structures
