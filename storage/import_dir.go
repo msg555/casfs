@@ -14,7 +14,6 @@ type hostInode struct {
 }
 
 type dirImportContext struct {
-	Storage         *StorageContext
 	MountView *MountView
 	HostInodeMap        map[hostInode]InodeId
 	IgnoreHardlinks bool
@@ -98,8 +97,8 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 
 	fileDir := file.(FileObjectDir)
 
-	buf := dc.Storage.Cache.Pool.Get().([]byte)
-	defer dc.Storage.Cache.Pool.Put(buf)
+	buf := dc.MountView.Cache.Pool.Get().([]byte)
+	defer dc.MountView.Cache.Pool.Put(buf)
 	for {
 		bytesRead, err := unix.Getdents(fd, buf)
 		if err != nil {
@@ -179,38 +178,27 @@ func (dc *dirImportContext) ImportDirectory(importDepth int, importPath string, 
 	return file.GetInodeId(), nil
 }
 
-func (sc *StorageContext) ImportPath(pathname string) (*StorageNode, error) {
-	mountView, err := sc.CreateEmptyMount()
-	if err != nil {
-		return nil, err
-	}
-
+func (mnt *MountView) ImportPath(pathname string) (InodeId, error) {
 	dc := &dirImportContext{
-		Storage:         sc,
-		MountView: mountView,
+		MountView: mnt,
 		HostInodeMap:        make(map[hostInode]InodeId),
 		IgnoreHardlinks: false,
 	}
 
 	var st unix.Stat_t
 	if err := unix.Stat(pathname, &st); err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	if !unix.S_ISDIR(st.Mode) {
-		return nil, errors.New("root import path must be a directory")
+		return 0, errors.New("root import path must be a directory")
 	}
 
 	fd, err := unix.Open(pathname, unix.O_RDONLY, 0)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer unix.Close(fd)
 
-	inodeId, err := dc.ImportDirectory(0, "", fd, &st)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	return dc.ImportDirectory(0, "", fd, &st)
 }

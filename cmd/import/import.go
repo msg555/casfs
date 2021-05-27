@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +12,14 @@ import (
 
 func help() {
 	fmt.Printf("%s (dir|tar) file [file ...]\n", os.Args[0])
+}
+
+func fail(err error, message string) {
+	gerr, ok := err.(*errors.Error)
+	if ok {
+		log.Fatalf("%s: %s\n%s", message, err, gerr.ErrorStack())
+	}
+	log.Fatalf("%s: %s", message, err)
 }
 
 func main() {
@@ -37,27 +44,21 @@ func main() {
 			file = "/dev/stdin"
 		}
 
-		var err error
-		var nd *storage.StorageNode
-		if mode == "dir" {
-			nd, err = sc.ImportPath(file)
-		} else {
-			var f *os.File
-			f, err = os.Open(file)
-			if err == nil {
-				nd, err = sc.ImportTar(f)
-				f.Close()
-			}
-		}
+		mnt, err := sc.CreateEmptyMount()
 		if err != nil {
-			gerr, ok := err.(*errors.Error)
-			if ok {
-				log.Fatalf("improt of '%s' failed: %s\n%s", file, err, gerr.ErrorStack())
-			} else {
-				log.Fatalf("import of '%s' failed: %s", file, err)
+			fail(err, "Failed to create new mount")
+		}
+
+		if mode == "dir" {
+			inodeId, err := mnt.ImportPath(file)
+			if err != nil {
+				fail(err, "failed to import path")
+			}
+			if err := mnt.SetRootNode(inodeId); err != nil {
+				fail(err, "failed to set root node")
 			}
 		} else {
-			fmt.Printf("imported '%s' as %s\n", file, hex.EncodeToString(nd.NodeAddress[:]))
+			log.Fatal("only dir import supported")
 		}
 	}
 

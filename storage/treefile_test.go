@@ -90,7 +90,7 @@ func TestRegReadWrite(t *testing.T) {
 	tm2 := TreeFileManager{}
 	tm2.Init(bfOverlay, &imap)
 
-	tfi2, err := tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
+	tfi2, err := tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestRegReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tfi2, err = tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
+	tfi2, err = tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestRegTruncate(t *testing.T) {
 	tm2 := TreeFileManager{}
 	tm2.Init(bfOverlay, &imap)
 
-	tfi2, err := tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
+	tfi2, err := tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestRegTruncate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tfi2, err = tm2.OpenFile(unix.DT_REG, tf1.GetInodeId())
+	tfi2, err = tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestDirFuzz(t *testing.T) {
 	tm2 := TreeFileManager{}
 	tm2.Init(bfOverlay, &imap)
 
-	tfi2, err := tm2.OpenFile(unix.DT_DIR, tf1.GetInodeId())
+	tfi2, err := tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestDirFuzz(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tfi2, err = tm2.OpenFile(unix.DT_DIR, tf1.GetInodeId())
+	tfi2, err = tm2.OpenFile(tf1.GetInodeId())
 	if err != nil {
 		t.Fatal(err)
 	}

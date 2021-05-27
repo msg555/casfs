@@ -1,12 +1,12 @@
 package storage
 
 import (
-	"os"
 	"path"
 
 	"github.com/go-errors/errors"
 	"github.com/google/uuid"
 
+	"github.com/msg555/ctrfs/blockcache"
 	"github.com/msg555/ctrfs/blockfile"
 )
 
@@ -17,12 +17,13 @@ const (
 
 type MountView struct {
 	ID          uuid.UUID
-	RootInode   InodeData
+	RootInodeId InodeId
 	ReadOnly    bool
 	Storage     *StorageContext
 	FileManager TreeFileManager
 	Blocks     blockfile.BlockAllocator
-	InodeMap
+	Cache			 *blockcache.BlockCache
+	InodeMap   InodeMap
 }
 
 // Creates a new empty mount. This mount does not have a root inode and it
@@ -51,6 +52,7 @@ func (sc *StorageContext) CreateEmptyMount() (*MountView, error) {
 		ReadOnly: false,
 		Storage: sc,
 		Blocks: bf,
+		Cache: sc.Cache,
 		InodeMap: imap,
 	}
 
@@ -58,8 +60,6 @@ func (sc *StorageContext) CreateEmptyMount() (*MountView, error) {
 		bf.Close()
 		return nil, err
 	}
-
-		RootInode: 3,
 
 	return mnt, nil
 }
@@ -125,24 +125,16 @@ func (sc *StorageContext) CreateMount(rootAddress []byte, readOnly bool) (*Mount
 }
 
 func (sc *StorageContext) OpenMount(id uuid.UUID) (*MountView, error) {
-	mnt := &MountView{
-		ID:        id,
-		WritePath: path.Join(sc.BasePath, "mounts", id.String()),
-		Storage:   sc,
-	}
-
-	st, err := os.Stat(mnt.WritePath)
-	if err != nil {
-		return nil, err
-	}
-	if !st.IsDir() {
-		return nil, errors.New("mount must be directory")
-	}
-
-	return mnt, nil
+	// TODO
+	return nil, nil
 }
 
-func (mnt *MountView) SetRoot(inodeId InodeId) error {
+func (mnt *MountView) SetRootNode(inodeId InodeId) error {
+	return mnt.Blocks.AccessBlock(mnt, blockIndexMeta, func(data []byte) (bool, error) {
+		mnt.RootInodeId = inodeId
+		bo.PutUint64(data, uint64(inodeId))
+		return true, nil
+	})
 }
 
 func (mnt *MountView) Readlink(inodeData *InodeData) (string, error) {

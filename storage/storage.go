@@ -12,8 +12,6 @@ import (
 	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
-
-	"github.com/boltdb/bolt"
 )
 
 const (
@@ -51,14 +49,9 @@ func OpenDefaultStorageContext() (*StorageContext, error) {
 func OpenStorageContext(basePath string) (*StorageContext, error) {
 	hashFactory := sha256.New
 
-	err := os.Mkdir(path.Join(basePath, "mounts"), 0777)
+	err := os.MkdirAll(path.Join(basePath, "mounts"), 0777)
 	if err != nil && !os.IsExist(err) {
 		return nil, err
-	}
-
-	nodeDB, err := bolt.Open(path.Join(basePath, "contentmap.db"), 0666, nil)
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	sc := &StorageContext{

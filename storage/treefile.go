@@ -67,8 +67,6 @@ type TreeFileObject struct {
 	lock      sync.RWMutex
 	inodeData InodeData
 	manager   *TreeFileManager
-
-	initialized bool
 }
 
 type TreeFileReg struct{
@@ -106,7 +104,6 @@ func (tm *TreeFileManager) NewFile(inodeData *InodeData) (FileObject, error) {
 		refCount:    1,
 		inodeData:   *inodeData,
 		manager:     tm,
-		initialized: true,
 	}
 
 	inodeId, err := tm.blocks.Allocate(tf)
@@ -137,95 +134,62 @@ func (tm *TreeFileManager) NewFile(inodeData *InodeData) (FileObject, error) {
 	return fo, nil
 }
 
-func (tm *TreeFileManager) OpenFile(dtType int, inodeId InodeId) (FileObject, error) {
-	var tf *TreeFileObject
-
+func (tm *TreeFileManager) OpenFile(inodeId InodeId) (FileObject, error) {
+	// Check if file already exists in active handles
 	tm.fileMapLock.Lock()
 	fo, ok := tm.fileMap[inodeId]
-	if !ok {
-		tf = &TreeFileObject{
-			inodeId:    inodeId,
-			srcInodeId: inodeId,
-			refCount:   1,
-			manager:    tm,
-		}
-		if dtType == unix.DT_REG {
-			tfi := &TreeFileReg{TreeFileObject: *tf}
-			tf = &tfi.TreeFileObject
-			fo = tfi
-		} else if dtType == unix.DT_DIR {
-			tfi := &TreeFileDir{TreeFileObject: *tf}
-			tf = &tfi.TreeFileObject
-			fo = tfi
-		} else if dtType == unix.DT_LNK {
-			tfi := &TreeFileLnk{TreeFileObject: *tf}
-			tf = &tfi.TreeFileObject
-			fo = tfi
-		} else {
-			tfi := &TreeFileOther{TreeFileObject: *tf}
-			tf = &tfi.TreeFileObject
-			fo = tfi
-		}
-		tm.fileMap[inodeId] = fo
-	} else {
+	if ok {
 		fo.addRef()
 	}
 	tm.fileMapLock.Unlock()
 
-	tf.lock.Lock()
-	defer tf.lock.Unlock()
-
-	if !tf.initialized {
-		cache := tm.blocks.GetCache()
-		buf := cache.Pool.Get().([]byte)
-		defer cache.Pool.Put(buf)
-
-		var err error
-		inodeId, err = tm.inodeMap.GetMappedNode(inodeId)
-		if err != nil {
-			return nil, err
-		}
-
-		_, err = tm.blocks.Read(inodeId, buf)
-		if err != nil {
-			return nil, err
-		}
-		tf.inodeData = *InodeFromBytes(buf)
-
-		if int((tf.inodeData.Mode&unix.S_IFMT)>>12) != dtType {
-			panic("opening file with wrong type")
-		}
-
-		// Inode block and tree node block (if exists) need to be writable.
-		tf.inodeId, err = blockfile.Duplicate(tf, tm.blocks, inodeId, true)
-		if err != nil {
-			return nil, err
-		}
-		if tf.inodeId != inodeId {
-			err := tm.inodeMap.AddMapping(inodeId, tf.inodeId)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		if tf.inodeData.TreeNode != 0 {
-			newTreeNode, err := blockfile.Duplicate(tf, tm.blocks, tf.inodeData.TreeNode, true)
-			if err != nil {
-				return nil, err
-			}
-			if newTreeNode != tf.inodeData.TreeNode {
-				tf.inodeData.TreeNode = newTreeNode
-
-				// Update indoe with changed tree node
-				copy(buf, tf.inodeData.ToBytes())
-				if err := tm.blocks.Write(tf, tf.inodeId, buf); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		tf.initialized = true
+	if fo != nil {
+		return fo, nil
 	}
+
+	// Otherwise we are (most likely) going to have to create this new object.
+	// We will need to map the inode and load the inode stat information first.
+	mappedInodeId, err := tm.inodeMap.GetMappedNode(inodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	var inodeData InodeData
+	err = tm.blocks.AccessBlock(nil, mappedInodeId, func(data []byte) (bool, error) {
+		inodeData = *InodeFromBytes(data)
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	dtType := (inodeData.Mode & unix.S_IFMT) >> 12
+
+	tm.fileMapLock.Lock()
+	defer tm.fileMapLock.Unlock()
+
+	fo, ok = tm.fileMap[inodeId]
+
+	// Check if someone else created the object underneath us.
+	if ok {
+		fo.addRef()
+		return fo, nil
+	}
+
+	tf := TreeFileObject{
+		inodeId:    mappedInodeId,
+		srcInodeId: inodeId,
+		refCount:   1,
+		manager:    tm,
+		inodeData:  inodeData,
+	}
+	if dtType == unix.DT_REG || dtType == unix.DT_LNK {
+		fo = &TreeFileReg{TreeFileObject: tf}
+	} else if dtType == unix.DT_DIR {
+		fo = &TreeFileDir{TreeFileObject: tf}
+	} else {
+		fo = &TreeFileOther{TreeFileObject: tf}
+	}
+	tm.fileMap[inodeId] = fo
 
 	return fo, nil
 }
@@ -255,6 +219,10 @@ func (tf *TreeFileObject) UpdateInode(updateFunc func(*InodeData) error) error {
 	tf.lock.Lock()
 	defer tf.lock.Unlock()
 
+	if err := tf.ensureWritable(false); err != nil {
+		return err
+	}
+
 	err := updateFunc(&tf.inodeData)
 	if err != nil {
 		return err
@@ -274,6 +242,55 @@ func (tf *TreeFileObject) Sync() error {
 
 func (tf *TreeFileObject) addRef() {
 	tf.refCount++
+}
+
+func (tf *TreeFileObject) ensureWritable(needLock bool) error {
+	tm := tf.manager
+	if needLock {
+		tf.lock.RLock()
+		defer tf.lock.RUnlock()
+	}
+
+	// Check if file already has been duplicated into a writable version.
+	if tf.inodeId != tf.srcInodeId {
+		return nil
+	}
+
+	// Duplicate the inode block if needed. If the inode is in a writable space
+	// already this is just a quick comparison.
+	duppedInodeId, err := blockfile.Duplicate(tf, tm.blocks, tf.inodeId, true)
+	if err != nil {
+		return err
+	}
+	if tf.inodeId == duppedInodeId {
+		return nil // inode already writable
+	}
+	tf.inodeId = duppedInodeId
+
+	// Add a mapping of the source node to this newlly allocated node.
+	if err := tm.inodeMap.AddMapping(tf.srcInodeId, tf.inodeId); err != nil {
+		return err
+	}
+
+	// The root tree node also needs to be writable if present.
+	if tf.inodeData.TreeNode == 0 {
+		return nil
+	}
+
+	newTreeNode, err := blockfile.Duplicate(tf, tm.blocks, tf.inodeData.TreeNode, true)
+	if err != nil {
+		return err
+	}
+	if newTreeNode == tf.inodeData.TreeNode {
+		return nil // tree node already writable
+	}
+
+	// Update inode data
+	tf.inodeData.TreeNode = newTreeNode
+	return tm.blocks.AccessBlock(tf, tf.inodeId, func(data []byte) (bool, error) {
+		copy(data, tf.inodeData.ToBytes())
+		return true, nil
+	})
 }
 
 func (tf *TreeFileOther) cacheContentAddress(sc *StorageContext) ([]byte, error) {

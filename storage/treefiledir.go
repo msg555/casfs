@@ -76,6 +76,9 @@ func (tf *TreeFileDir) lookupTree(name string) (int, InodeId, error) {
 }
 
 func (tf *TreeFileDir) Lookup(name string) (int, InodeId, error) {
+	tf.lock.RLock()
+	defer tf.lock.RUnlock()
+
 	if tf.inodeData.TreeNode == 0 {
 		return tf.lookupInline(name)
 	}
@@ -143,6 +146,12 @@ func (tf *TreeFileDir) linkTree(name string, dtType int, inodeId InodeId, overwr
 }
 
 func (tf *TreeFileDir) Link(name string, dtType int, inodeId InodeId, overwrite bool) error {
+	tf.lock.Lock()
+	defer tf.lock.Unlock()
+
+	if err := tf.ensureWritable(false); err != nil {
+		return err
+	}
 	if tf.inodeData.TreeNode == 0 {
 		written, err := tf.linkInline(name, dtType, inodeId, overwrite)
 		if err != nil {
@@ -197,6 +206,13 @@ func (tf *TreeFileDir) unlinkTree(name string) (bool, error) {
 }
 
 func (tf *TreeFileDir) Unlink(name string) (bool, error) {
+	tf.lock.Lock()
+	defer tf.lock.Unlock()
+
+	if err := tf.ensureWritable(false); err != nil {
+		return false, err
+	}
+
 	if tf.inodeData.TreeNode == 0 {
 		return tf.unlinkInline(name)
 	}
@@ -243,6 +259,9 @@ func (tf *TreeFileDir) scanTree(startName string, entryCallback func(name string
 }
 
 func (tf *TreeFileDir) Scan(startName string, entryCallback func(name string, dtType int, inodeId InodeId) bool) (bool, error) {
+	tf.lock.RLock()
+	defer tf.lock.RUnlock()
+
 	if tf.inodeData.TreeNode == 0 {
 		return tf.scanInline(startName, entryCallback)
 	}

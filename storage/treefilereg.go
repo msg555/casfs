@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"io"
+
 	"github.com/msg555/ctrfs/blockfile"
 	"github.com/msg555/ctrfs/btree"
 	"github.com/msg555/ctrfs/unix"
@@ -339,6 +341,10 @@ func (tf *TreeFileReg) WriteAt(p []byte, off int64) (int, error) {
 	tf.lock.Lock()
 	defer tf.lock.Unlock()
 
+	if err := tf.ensureWritable(false); err != nil {
+		return 0, err
+	}
+
 	blockSize := int64(tf.manager.blocks.GetBlockSize())
 	dataBlockStart := off / int64(blockSize)
 
@@ -432,7 +438,7 @@ func (tf *TreeFileReg) Read(p []byte) (int, error) {
 	defer tf.offsetLock.Unlock()
 
 	n, err := tf.ReadAt(p, tf.offset)
-	tf.offset += n
+	tf.offset += int64(n)
 	return n, err
 }
 
@@ -441,7 +447,7 @@ func (tf *TreeFileReg) Write(p []byte) (int, error) {
 	defer tf.offsetLock.Unlock()
 
 	n, err := tf.WriteAt(p, tf.offset)
-	tf.offset += n
+	tf.offset += int64(n)
 	return n, err
 }
 
@@ -455,8 +461,9 @@ func (tf *TreeFileReg) Seek(offset int64, whence int) (int64, error) {
 	} else if whence == io.SeekEnd {
 		tf.lock.RLock()
 		defer tf.lock.RUnlock()
-		base = tf.inodeData.Size
+		base = int64(tf.inodeData.Size)
 	}
 
 	tf.offset = base + offset
+	return tf.offset, nil
 }
